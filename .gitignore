@@ -1,11 +1,11 @@
-swspl/target/
-Cargo.lock
+
 .vscode/
-.idea/
-*.swp
-*.swo
 .DS_Store
 Thumbs.db
-/.cargo/
 *.nso
 *.exe
+*.bin
+*.s
+.vs/*
+bin/*
+obj/*
