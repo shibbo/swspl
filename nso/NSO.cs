@@ -5,6 +5,8 @@ using System.Text;
 using System.Threading.Tasks;
 using K4os.Compression.LZ4;
 using System.Security.Cryptography;
+using System.Diagnostics.SymbolStore;
+using System.Diagnostics.CodeAnalysis;
 
 namespace swspl.nso
 {
@@ -97,7 +99,10 @@ namespace swspl.nso
                         data = reader.ReadBytes(dataSeg.GetSize());
                     }
 
-                    // now let's check our hashes to ensuraaaaaaaaaaaae we have the right data
+                    File.WriteAllBytes("text.bin", text);
+                    File.WriteAllBytes("rodata.bin", rodata);
+
+                    // now let's check our hashes to ensure we have the right data
                     byte[] textCmprHash = Util.GetSHA(text);
                     byte[] roDataCmprHash = Util.GetSHA(rodata);
                     byte[] dataCmprHash = Util.GetSHA(data);
@@ -137,26 +142,71 @@ namespace swspl.nso
                     dynReader.BaseStream.Seek(dynSymOffs, SeekOrigin.Begin);
                     DynamicSymbolTable dynTbl = new(dynReader, numSyms);
 
+                    //File.WriteAllBytes("data.bin", data);
+
+                    // our module info and other stuff is inside of .text
+                    BinaryReader textReader = new(new MemoryStream(text), Encoding.UTF8);
+                    Module module = new(textReader);
+
+                    // now let's find our .dynamic section, as it is a bit tricky
+                    uint dynOffs = module.mDynOffset - dataSeg.GetMemoryOffset();
+                    // our .dynamic section is in .data
+                    BinaryReader dataReader = new(new MemoryStream(data), Encoding.UTF8);
+                    dataReader.BaseStream.Position = dynOffs;
+                    DynamicSegment seg = new(dataReader);
+
+                    List<string> syms = new();
+
                     // let's see if we can build a symbols.txt
                     for (int i = 0; i < numSyms; i++)
                     {
                         DynamicSymbol sym = dynTbl.mSymbols[i];
                         string symbol = DynamicStringTable.GetSymbolAtOffs(sym.mStrTableOffs);
 
+                        string section;
+
+                        if (symbol == "dialog_arc_org_size")
+                        {
+
+                        }
+
+                        switch (sym.mSectionIdx)
+                        {
+                            case 0:
+                            case 2:
+                                section = ".text";
+                                break;
+                            case 1:
+                                section = ".rodata";
+                                break;
+                            case 11:
+                                section = ".rodata.2";
+                                break;
+                            case 17:
+                                section = ".data";
+                                break;
+                            case 26:
+                                section = ".bss";
+                                break;
+                            default:
+                                section = ".unk";
+                                break;
+                        }
+
                         string binding;
                         switch (sym.mInfo >> 4)
                         {
                             case 0:
-                                binding = "LOCAL";
+                                binding = "scope:local";
                                 break;
                             case 1:
-                                binding = "GLOBAL";
+                                binding = "scope:global";
                                 break;
                             case 2:
-                                binding = "WEAK";
+                                binding = "scope:weak";
                                 break;
                             default:
-                                binding = "UNK";
+                                binding = "scope:unknown";
                                 break;
                         }
 
@@ -164,24 +214,32 @@ namespace swspl.nso
                         switch (sym.mInfo & 0xF)
                         {
                             case 1:
-                                type = "OBJECT";
+                                type = "type:object";
                                 break;
                             case 2:
-                                type = "FUNC";
+                                type = "type:function";
                                 break;
                             case 3:
-                                type = "SECTION";
+                                type = "type:section";
                                 break;
                             case 4:
-                                type = "FILE";
+                                type = "type:file";
                                 break;
                             default:
-                                type = "UNK";
+                                type = "type:unknown";
                                 break;
                         }
 
-                        Console.WriteLine($"Address: {sym.mValue}\tSize: {sym.mSize}\tType: {type}\tBinding: {binding}\tSymbol: {symbol}");
+                        if (sym.mSize == 0)
+                        {
+                            continue;
+                        }
+
+                        string size = $"{sym.mSize:X}".TrimStart('0').Insert(0, "0x");
+                        syms.Add($"{symbol} = {section}:0x{sym.mValue:X8}; // {type} size:{size} {binding}");
                     }
+
+                    //File.WriteAllLines("symbols.txt", syms);
                     
                 }
             }

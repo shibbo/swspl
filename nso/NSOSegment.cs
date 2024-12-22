@@ -20,6 +20,11 @@ namespace swspl.nso
             return mOffset;
         }
 
+        public uint GetMemoryOffset()
+        {
+            return mMemOffset;
+        }
+
         public int GetSize()
         {
             return mSize;
