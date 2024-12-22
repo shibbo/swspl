@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -73,18 +74,45 @@ namespace swspl.nso
                 TagType kind = (TagType)reader.ReadInt64();
                 long value = reader.ReadInt64();
 
-                if (kind != 0)
-                {
-                    mTags.Add(kind, value);
-                }
-                else
+                if (kind == 0)
                 {
                     break;
+                }
+
+                switch (kind)
+                {
+                    case TagType.DT_NEEDED:
+                        if (!mTags.ContainsKey(TagType.DT_NEEDED))
+                        {
+                            mTags[TagType.DT_NEEDED] = new List<long>();
+                            List<long>? values = mTags[TagType.DT_NEEDED] as List<long>;
+                            values?.Add(value);
+                        }
+                        else
+                        {
+                            List<long>? values = mTags[TagType.DT_NEEDED] as List<long>;
+                            values?.Add(value);
+                        }
+                        break;
+                    default:
+                        mTags.Add(kind, value);
+                        break;
                 }
             }
         }
 
-        Dictionary<TagType, long> mTags = new();
+        public bool ContainsTag(TagType type)
+        {
+            return mTags.ContainsKey(type);
+        }
+
+        public T GetTagValue<T>(TagType type)
+        {
+
+            return (T)mTags[type];
+        }
+
+        Dictionary<TagType, object> mTags = new();
     }
 
     public class DynamicSymbol

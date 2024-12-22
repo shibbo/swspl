@@ -99,8 +99,8 @@ namespace swspl.nso
                         data = reader.ReadBytes(dataSeg.GetSize());
                     }
 
-                    File.WriteAllBytes("text.bin", text);
-                    File.WriteAllBytes("rodata.bin", rodata);
+                    //File.WriteAllBytes("text.bin", text);
+                    //File.WriteAllBytes("rodata.bin", rodata);
 
                     // now let's check our hashes to ensure we have the right data
                     byte[] textCmprHash = Util.GetSHA(text);
@@ -142,6 +142,7 @@ namespace swspl.nso
                     dynReader.BaseStream.Seek(dynSymOffs, SeekOrigin.Begin);
                     DynamicSymbolTable dynTbl = new(dynReader, numSyms);
 
+
                     //File.WriteAllBytes("data.bin", data);
 
                     // our module info and other stuff is inside of .text
@@ -154,6 +155,13 @@ namespace swspl.nso
                     BinaryReader dataReader = new(new MemoryStream(data), Encoding.UTF8);
                     dataReader.BaseStream.Position = dynOffs;
                     DynamicSegment seg = new(dataReader);
+
+                    // .hash is in our rodata
+                    // we access its offset in the .rodata binary
+                    long hashOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_HASH) - rodataSeg.GetMemoryOffset();
+                    dynReader.BaseStream.Seek(hashOffs, SeekOrigin.Begin);
+                    HashTable hashTbl = new(dynReader);
+                    GNUHashTable gnuHashTbl = new(dynReader);
 
                     List<string> syms = new();
 
