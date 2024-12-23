@@ -112,6 +112,11 @@ namespace swspl.nso
             return (T)mTags[type];
         }
 
+        public long GetRelocationCount()
+        {
+            return GetTagValue<long>(TagType.DT_RELASZ) / GetTagValue<long>(TagType.DT_RELAENT);
+        }
+
         Dictionary<TagType, object> mTags = new();
     }
 

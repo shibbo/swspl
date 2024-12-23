@@ -7,6 +7,7 @@ using K4os.Compression.LZ4;
 using System.Security.Cryptography;
 using System.Diagnostics.SymbolStore;
 using System.Diagnostics.CodeAnalysis;
+using System.Resources;
 
 namespace swspl.nso
 {
@@ -136,6 +137,8 @@ namespace swspl.nso
 
                     // our data is valid. we can move on to our dynamic stuff
                     BinaryReader dynReader = new(new MemoryStream(rodata), Encoding.UTF8);
+                    // our build string is right at the beginning
+                    BuildStr buildStr = new(dynReader);
                     dynReader.BaseStream.Seek(dynStrOffs, SeekOrigin.Begin);
                     DynamicStringTable strTbl = new(dynReader, dynStrSize);
                     uint numSyms = dynSymSize / 24;
@@ -163,6 +166,15 @@ namespace swspl.nso
                     HashTable hashTbl = new(dynReader);
                     GNUHashTable gnuHashTbl = new(dynReader);
 
+                    long relocCount = seg.GetRelocationCount();
+                    // jump to our relocation table
+                    long relocOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_RELA) - rodataSeg.GetMemoryOffset();
+                    dynReader.BaseStream.Seek(relocOffs, SeekOrigin.Begin);
+                    RelocationTable relocTbl = new(dynReader, relocCount);
+                    long pltOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_JMPREL) - rodataSeg.GetMemoryOffset();
+                    dynReader.BaseStream.Seek(pltOffs, SeekOrigin.Begin);
+                    long pltCount = seg.GetTagValue<long>(DynamicSegment.TagType.DT_PLTRELSZ) / 0x14;
+                    RelocationPLT plt = new(dynReader, pltCount);
                     List<string> syms = new();
 
                     // let's see if we can build a symbols.txt

@@ -5,6 +5,6 @@ class Progam
 {
     static void Main(string[] args)
     {
-        NSO nso = new NSO("odyssey.nso");
+        NSO nso = new NSO("bf.nso");
     }
 }
