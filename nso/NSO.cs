@@ -175,7 +175,23 @@ namespace swspl.nso
                     dynReader.BaseStream.Seek(pltOffs, SeekOrigin.Begin);
                     long pltCount = seg.GetTagValue<long>(DynamicSegment.TagType.DT_PLTRELSZ) / 0x14;
                     RelocationPLT plt = new(dynReader, pltCount);
+                    long gotPltOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_PLTGOT) - dataSeg.GetMemoryOffset();
+                    GlobalPLT globalPLT = new(dataReader, plt.GetNumJumps());
                     List<string> syms = new();
+
+                    long gotStart = dataReader.BaseStream.Position;
+                    // getting our .got is a bit more difficult
+                    // we do not know where it ends, but we do know it is right after .got.plt ends
+                    long gotEnd = seg.GetTagValue<long>(DynamicSegment.TagType.DT_INIT_ARRAY) - dataSeg.GetMemoryOffset();
+                    // now let's figure out how many entries we have
+                    long gotCount = (gotEnd - gotStart) / 8;
+
+                    List<long> got = new();
+
+                    for (int i = 0; i < gotCount; i++)
+                    {
+                        got.Add(dataReader.ReadInt64());
+                    }
 
                     // let's see if we can build a symbols.txt
                     for (int i = 0; i < numSyms; i++)
