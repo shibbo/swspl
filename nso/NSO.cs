@@ -24,6 +24,8 @@ namespace swspl.nso
                         throw new Exception("NSO::NSO(string) -- Invalid NSO signature.");
                     }
 
+                    string filename = Path.GetFileNameWithoutExtension(filepath);
+
                     // skip the version and reversed sections
                     reader.ReadBytes(8);
 
@@ -100,8 +102,9 @@ namespace swspl.nso
                         data = reader.ReadBytes(dataSeg.GetSize());
                     }
 
-                    //File.WriteAllBytes("text.bin", text);
-                    //File.WriteAllBytes("rodata.bin", rodata);
+                    File.WriteAllBytes($"{filename}_text.bin", text);
+                    File.WriteAllBytes($"{filename}_data.bin", data);
+                    File.WriteAllBytes($"{filename}_rodata.bin", rodata);
 
                     // now let's check our hashes to ensure we have the right data
                     byte[] textCmprHash = Util.GetSHA(text);
@@ -137,48 +140,53 @@ namespace swspl.nso
 
                     // our data is valid. we can move on to our dynamic stuff
                     BinaryReader dynReader = new(new MemoryStream(rodata), Encoding.UTF8);
-                    // our build string is right at the beginning
+                    
+                    /* .buildstr */
                     BuildStr buildStr = new(dynReader);
+
+                    /* .dynstr */
                     dynReader.BaseStream.Seek(dynStrOffs, SeekOrigin.Begin);
                     DynamicStringTable strTbl = new(dynReader, dynStrSize);
+
+                    /* .dynsym */
                     uint numSyms = dynSymSize / 24;
                     dynReader.BaseStream.Seek(dynSymOffs, SeekOrigin.Begin);
                     DynamicSymbolTable dynTbl = new(dynReader, numSyms);
 
-
-                    //File.WriteAllBytes("data.bin", data);
-
-                    // our module info and other stuff is inside of .text
+                    // MOD0
                     BinaryReader textReader = new(new MemoryStream(text), Encoding.UTF8);
                     Module module = new(textReader);
 
-                    // now let's find our .dynamic section, as it is a bit tricky
+                    /* .dynamic */
                     uint dynOffs = module.mDynOffset - dataSeg.GetMemoryOffset();
-                    // our .dynamic section is in .data
                     BinaryReader dataReader = new(new MemoryStream(data), Encoding.UTF8);
                     dataReader.BaseStream.Position = dynOffs;
                     DynamicSegment seg = new(dataReader);
 
-                    // .hash is in our rodata
-                    // we access its offset in the .rodata binary
+                    /* .hash */
                     long hashOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_HASH) - rodataSeg.GetMemoryOffset();
                     dynReader.BaseStream.Seek(hashOffs, SeekOrigin.Begin);
                     HashTable hashTbl = new(dynReader);
+                    /* .gnu_hash */
                     GNUHashTable gnuHashTbl = new(dynReader);
 
+                    /* .rela.dyn */
                     long relocCount = seg.GetRelocationCount();
-                    // jump to our relocation table
                     long relocOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_RELA) - rodataSeg.GetMemoryOffset();
                     dynReader.BaseStream.Seek(relocOffs, SeekOrigin.Begin);
                     RelocationTable relocTbl = new(dynReader, relocCount);
+
+                    /* .rela.plt */
                     long pltOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_JMPREL) - rodataSeg.GetMemoryOffset();
                     dynReader.BaseStream.Seek(pltOffs, SeekOrigin.Begin);
                     long pltCount = seg.GetTagValue<long>(DynamicSegment.TagType.DT_PLTRELSZ) / 0x14;
                     RelocationPLT plt = new(dynReader, pltCount);
+
+                    /* .got.plt */
                     long gotPltOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_PLTGOT) - dataSeg.GetMemoryOffset();
                     GlobalPLT globalPLT = new(dataReader, plt.GetNumJumps());
-                    List<string> syms = new();
 
+                    /* .got */
                     long gotStart = dataReader.BaseStream.Position;
                     // getting our .got is a bit more difficult
                     // we do not know where it ends, but we do know it is right after .got.plt ends
@@ -192,91 +200,6 @@ namespace swspl.nso
                     {
                         got.Add(dataReader.ReadInt64());
                     }
-
-                    // let's see if we can build a symbols.txt
-                    for (int i = 0; i < numSyms; i++)
-                    {
-                        DynamicSymbol sym = dynTbl.mSymbols[i];
-                        string symbol = DynamicStringTable.GetSymbolAtOffs(sym.mStrTableOffs);
-
-                        string section;
-
-                        if (symbol == "dialog_arc_org_size")
-                        {
-
-                        }
-
-                        switch (sym.mSectionIdx)
-                        {
-                            case 0:
-                            case 2:
-                                section = ".text";
-                                break;
-                            case 1:
-                                section = ".rodata";
-                                break;
-                            case 11:
-                                section = ".rodata.2";
-                                break;
-                            case 17:
-                                section = ".data";
-                                break;
-                            case 26:
-                                section = ".bss";
-                                break;
-                            default:
-                                section = ".unk";
-                                break;
-                        }
-
-                        string binding;
-                        switch (sym.mInfo >> 4)
-                        {
-                            case 0:
-                                binding = "scope:local";
-                                break;
-                            case 1:
-                                binding = "scope:global";
-                                break;
-                            case 2:
-                                binding = "scope:weak";
-                                break;
-                            default:
-                                binding = "scope:unknown";
-                                break;
-                        }
-
-                        string type;
-                        switch (sym.mInfo & 0xF)
-                        {
-                            case 1:
-                                type = "type:object";
-                                break;
-                            case 2:
-                                type = "type:function";
-                                break;
-                            case 3:
-                                type = "type:section";
-                                break;
-                            case 4:
-                                type = "type:file";
-                                break;
-                            default:
-                                type = "type:unknown";
-                                break;
-                        }
-
-                        if (sym.mSize == 0)
-                        {
-                            continue;
-                        }
-
-                        string size = $"{sym.mSize:X}".TrimStart('0').Insert(0, "0x");
-                        syms.Add($"{symbol} = {section}:0x{sym.mValue:X8}; // {type} size:{size} {binding}");
-                    }
-
-                    //File.WriteAllLines("symbols.txt", syms);
-                    
                 }
             }
             else
