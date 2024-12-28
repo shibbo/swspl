@@ -200,6 +200,22 @@ namespace swspl.nso
                     {
                         got.Add(dataReader.ReadInt64());
                     }
+
+                    /* read the rest of our .text */
+                    /* some MOD0s end with padding, some don't. there really isn't a way to tell. */
+                    while (true)
+                    {
+                        // ...so let's read until we hit nonzero
+                        if (textReader.ReadUInt32() != 0)
+                        {
+                            textReader.BaseStream.Position -= 4;
+                            break;
+                        }
+                    }
+
+                    int remainingText = textSeg.GetSize() - (int)textReader.BaseStream.Position;
+                    byte[] textBytes = textReader.ReadBytes(remainingText);
+
                 }
             }
             else
