@@ -224,7 +224,7 @@ namespace swspl.nso
                     Dictionary<string, Arm64Instruction[]> funcs = new();
                     int remainingText = textSeg.GetSize() - (int)textReader.BaseStream.Position;
                     byte[] textBytes = textReader.ReadBytes(remainingText);
-                    const Arm64DisassembleMode mode = Arm64DisassembleMode.Arm;
+                    const Arm64DisassembleMode mode = Arm64DisassembleMode.LittleEndian | Arm64DisassembleMode.Arm;
 
                     Dictionary<string, List<string>> textfile = new();
                     //textfile.Add(".section \".text\", \"ax\"");
@@ -242,27 +242,35 @@ namespace swspl.nso
                         long pos = (long)sym.mValue - startPos;
                         byte[] funcBytes = textBytes.Skip((int)pos).Take((int)sym.mSize).ToArray();
 
-                        List<ulong> jumps = new();
-
-                        if (symbolName == "_ZN22KoopaFireBallGenerator7exeHideEv")
-                        {
-
+                        if (symbolName == "_ZN4sead6system4HaltEv") { 
                         }
+
+                        List<ulong> jumps = new();
 
                         using (CapstoneArm64Disassembler dis = CapstoneDisassembler.CreateArm64Disassembler(mode))
                         {
                             dis.EnableInstructionDetails = true;
+                            // we have to enable this due to the fact that TRAP is invalid with capstone
+                            dis.EnableSkipDataMode = true;
                             dis.DisassembleSyntax = DisassembleSyntax.Intel;
 
-                            Arm64Instruction[] instrs = dis.Disassemble(funcBytes, pos + 0x30);
+                            Arm64Instruction[] instrs = dis.Disassemble(funcBytes, pos + startPos);
                             funcs.Add(symbolName, instrs);
 
                             for (int i = 0; i < instrs.Length; i++)
                             {
                                 Arm64Instruction instr = instrs[i];
 
+                                if (instr.Mnemonic == ".byte")
+                                {
+                                    // TRAP instruction
+                                    if (instr.Operand == "0xfe, 0xde, 0xff, 0xe7")
+                                    {
+                                        funcStr.Add($"\trap");
+                                    }
+                                }
                                 // bl need to be defined differently
-                                if (instr.Mnemonic == "bl")
+                                else  if (instr.Mnemonic == "bl")
                                 {
                                     long baseAddr = 0x7100000000;
                                     ulong oper = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
@@ -284,7 +292,7 @@ namespace swspl.nso
                                 }
                                 else if (Util.IsBranchInstr(instr.Mnemonic))
                                 {
-                                    if (instr.Mnemonic == "tbz")
+                                    if (instr.Mnemonic == "tbz" || instr.Mnemonic == "tbnz")
                                     {
                                         // second part of the instruction is the addr itself
                                         ulong addr = (ulong)instr.Details.Operands[2].Immediate;
@@ -313,6 +321,11 @@ namespace swspl.nso
                                         // make sure we account for it
                                         ulong jmp = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
                                         ulong range = (ulong)pos + sym.mSize;
+
+                                        if (symbolName == "_ZNK21HelpAmiiboCountUpCoin14isTriggerTouchERKN2al7NfpInfoE")
+                                        {
+
+                                        }
 
                                         // is our jump in range of our current function?
                                         // if it is, it is a local branch

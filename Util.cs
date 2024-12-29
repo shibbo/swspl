@@ -80,6 +80,7 @@ namespace swspl
                 case "b.hs":
                 case "b.eq":
                 case "tbz":
+                case "tbnz":
                 case "cbz":
                     return true;
                 default:
