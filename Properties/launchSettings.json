@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "swspl": {
+      "commandName": "Project",
+      "commandLineArgs": "split bf.nso"
+    }
+  }
+}

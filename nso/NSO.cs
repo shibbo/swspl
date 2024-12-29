@@ -8,6 +8,10 @@ using System.Security.Cryptography;
 using System.Diagnostics.SymbolStore;
 using System.Diagnostics.CodeAnalysis;
 using System.Resources;
+using Gee.External.Capstone;
+using Gee.External.Capstone.Arm64;
+using Microsoft.VisualBasic.FileIO;
+using System.ComponentModel;
 
 namespace swspl.nso
 {
@@ -213,9 +217,160 @@ namespace swspl.nso
                         }
                     }
 
+                    // our functions are relative to the end of MOD0
+                    long startPos = textReader.BaseStream.Position;
+
+                    // now we read the remaining portion of .text and map those instructions to symbols
+                    Dictionary<string, Arm64Instruction[]> funcs = new();
                     int remainingText = textSeg.GetSize() - (int)textReader.BaseStream.Position;
                     byte[] textBytes = textReader.ReadBytes(remainingText);
+                    const Arm64DisassembleMode mode = Arm64DisassembleMode.Arm;
 
+                    Dictionary<string, List<string>> textfile = new();
+                    //textfile.Add(".section \".text\", \"ax\"");
+
+                    foreach (DynamicSymbol sym in dynTbl.mSymbols)
+                    {
+                        List<string> funcStr = new();
+                        // symbols tied to a size of 0 are not .text
+                        if (sym.mSize == 0)
+                        {
+                            continue;
+                        }
+
+                        string symbolName = strTbl.GetSymbolAtOffs(sym.mStrTableOffs);
+                        long pos = (long)sym.mValue - startPos;
+                        byte[] funcBytes = textBytes.Skip((int)pos).Take((int)sym.mSize).ToArray();
+
+                        List<ulong> jumps = new();
+
+                        if (symbolName == "_ZN22KoopaFireBallGenerator7exeHideEv")
+                        {
+
+                        }
+
+                        using (CapstoneArm64Disassembler dis = CapstoneDisassembler.CreateArm64Disassembler(mode))
+                        {
+                            dis.EnableInstructionDetails = true;
+                            dis.DisassembleSyntax = DisassembleSyntax.Intel;
+
+                            Arm64Instruction[] instrs = dis.Disassemble(funcBytes, pos + 0x30);
+                            funcs.Add(symbolName, instrs);
+
+                            for (int i = 0; i < instrs.Length; i++)
+                            {
+                                Arm64Instruction instr = instrs[i];
+
+                                // bl need to be defined differently
+                                if (instr.Mnemonic == "bl")
+                                {
+                                    long baseAddr = 0x7100000000;
+                                    ulong oper = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
+
+                                    DynamicSymbol? jumpSym = dynTbl.GetSymbolAtAddr(oper);
+
+                                    string jumpSymName = "";
+
+                                    if (jumpSym != null)
+                                    {
+                                        jumpSymName = $"bl {strTbl.GetSymbolAtOffs(jumpSym.mStrTableOffs)}";
+                                    }
+                                    else
+                                    {
+                                        jumpSymName = $"fn_{oper}";
+                                    }
+
+                                    funcStr.Add($"\t{jumpSymName}");
+                                }
+                                else if (Util.IsBranchInstr(instr.Mnemonic))
+                                {
+                                    if (instr.Mnemonic == "tbz")
+                                    {
+                                        // second part of the instruction is the addr itself
+                                        ulong addr = (ulong)instr.Details.Operands[2].Immediate;
+
+                                        if (!jumps.Contains(addr))
+                                        {
+                                            jumps.Add(addr);
+                                        }
+
+                                        funcStr.Add($"\t{instr.Mnemonic} loc_{addr}");
+                                    }
+                                    else if (instr.Mnemonic == "cbz")
+                                    {
+                                        ulong addr = (ulong)instr.Details.Operands[1].Immediate;
+
+                                        if (!jumps.Contains(addr))
+                                        {
+                                            jumps.Add(addr);
+                                        }
+
+                                        funcStr.Add($"\t{instr.Mnemonic} loc_{addr}");
+                                    }
+                                    else
+                                    {
+                                        // sometimes the compiler can branch to another function without using BL
+                                        // make sure we account for it
+                                        ulong jmp = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
+                                        ulong range = (ulong)pos + sym.mSize;
+
+                                        // is our jump in range of our current function?
+                                        // if it is, it is a local branch
+                                        // if not, it is a function call
+                                        if (jmp >= (ulong)pos && jmp <= range)
+                                        {
+                                            // avoid duplicating jumps
+                                            if (!jumps.Contains(jmp))
+                                            {
+                                                jumps.Add(jmp);
+                                            }
+
+                                            funcStr.Add($"\t{instr.Mnemonic} loc_{jmp}");
+                                        }
+                                        else
+                                        {
+                                            funcStr.Add($"\t{instr.Mnemonic} fn_{jmp}");
+                                        }
+                                    }
+
+                                }
+                                else
+                                {
+                                    funcStr.Add($"\t{instr}");
+                                }
+                            }
+
+                            // sort our offsets so we can properly insert them without screwing up other indicies
+                            jumps.Sort();
+
+                            // now let's resolve our jumps
+                            foreach(ulong jmp in jumps)
+                            {
+                                // figure out the offset within the function to insert our instruction at
+                                ulong offs = jmp - sym.mValue;
+                                // now we get the index into our already obtained list of strings
+                                int funcIdx = (int)offs / 4;
+                                // insert our local string into the function strings...we use the index + indexof to properly account for other jumps already inserted
+                                funcStr.Insert(funcIdx + jumps.IndexOf(jmp), $"loc_{jmp}:");
+                            }
+                        }
+
+                        textfile.Add(symbolName, funcStr);
+                    }
+
+                    List<string> file = new();
+
+                    foreach(KeyValuePair<string, List<string>> e in textfile) {
+                        file.Add($".global {e.Key}");
+                        file.Add($"{e.Key}:");
+                        foreach(string str in e.Value)
+                        {
+                            file.Add(str);
+                        }
+                        file.Add("\n");
+                    }
+
+                    File.WriteAllLines("text.s", file.ToArray());
                 }
             }
             else

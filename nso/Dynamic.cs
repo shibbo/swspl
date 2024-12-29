@@ -157,6 +157,11 @@ namespace swspl.nso
             mSymbols = mSymbols.OrderBy(symbol => symbol.mValue).ToList();
         }
 
+        public DynamicSymbol? GetSymbolAtAddr(ulong addr)
+        {
+            return mSymbols.Find(s => s.mValue == addr);
+        }
+
         public List<DynamicSymbol> mSymbols = new();
     }
 
@@ -179,7 +184,7 @@ namespace swspl.nso
 
         }
 
-        public static String GetSymbolAtOffs(long offset)
+        public String GetSymbolAtOffs(long offset)
         {
             if (mStringTable.ContainsKey(offset))
             {
@@ -189,6 +194,6 @@ namespace swspl.nso
             return "UNK";
         }
 
-        static Dictionary<long, String> mStringTable = new();
+        Dictionary<long, String> mStringTable = new();
     }
 }

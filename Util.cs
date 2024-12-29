@@ -66,5 +66,25 @@ namespace swspl
 
             return true;
         }
+
+        public static bool IsBranchInstr(string instr)
+        {
+            switch (instr)
+            {
+                case "b":
+                case "b.ne":
+                case "b.ge":
+                case "b.lt":
+                case "b.gt":
+                case "b.lo":
+                case "b.hs":
+                case "b.eq":
+                case "tbz":
+                case "cbz":
+                    return true;
+                default:
+                    return false;
+            }
+        }
     }
 }
