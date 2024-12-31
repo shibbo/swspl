@@ -227,6 +227,7 @@ namespace swspl.nso
                     const Arm64DisassembleMode mode = Arm64DisassembleMode.LittleEndian | Arm64DisassembleMode.Arm;
 
                     Dictionary<string, List<string>> textfile = new();
+                    ulong baseAddr = 0x7100000000;
                     //textfile.Add(".section \".text\", \"ax\"");
 
                     foreach (DynamicSymbol sym in dynTbl.mSymbols)
@@ -241,9 +242,6 @@ namespace swspl.nso
                         string symbolName = strTbl.GetSymbolAtOffs(sym.mStrTableOffs);
                         long pos = (long)sym.mValue - startPos;
                         byte[] funcBytes = textBytes.Skip((int)pos).Take((int)sym.mSize).ToArray();
-
-                        if (symbolName == "_ZN4sead6system4HaltEv") { 
-                        }
 
                         List<ulong> jumps = new();
 
@@ -272,7 +270,6 @@ namespace swspl.nso
                                 // bl need to be defined differently
                                 else  if (instr.Mnemonic == "bl")
                                 {
-                                    long baseAddr = 0x7100000000;
                                     ulong oper = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
 
                                     DynamicSymbol? jumpSym = dynTbl.GetSymbolAtAddr(oper);
@@ -285,7 +282,7 @@ namespace swspl.nso
                                     }
                                     else
                                     {
-                                        jumpSymName = $"fn_{oper}";
+                                        jumpSymName = $"bl fn_{(baseAddr + oper).ToString("X")}";
                                     }
 
                                     funcStr.Add($"\t{jumpSymName}");
@@ -302,7 +299,7 @@ namespace swspl.nso
                                             jumps.Add(addr);
                                         }
 
-                                        funcStr.Add($"\t{instr.Mnemonic} loc_{addr}");
+                                        funcStr.Add($"\t{instr.Mnemonic} #{instr.Details.Operands[1].Immediate} loc_{(baseAddr + addr).ToString("X")}");
                                     }
                                     else if (instr.Mnemonic == "cbz")
                                     {
@@ -313,7 +310,7 @@ namespace swspl.nso
                                             jumps.Add(addr);
                                         }
 
-                                        funcStr.Add($"\t{instr.Mnemonic} loc_{addr}");
+                                        funcStr.Add($"\t{instr.Mnemonic} loc_{(baseAddr + addr).ToString("X")}");
                                     }
                                     else
                                     {
@@ -321,12 +318,6 @@ namespace swspl.nso
                                         // make sure we account for it
                                         ulong jmp = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
                                         ulong range = (ulong)pos + sym.mSize;
-
-                                        if (symbolName == "_ZNK21HelpAmiiboCountUpCoin14isTriggerTouchERKN2al7NfpInfoE")
-                                        {
-
-                                        }
-
                                         // is our jump in range of our current function?
                                         // if it is, it is a local branch
                                         // if not, it is a function call
@@ -338,11 +329,11 @@ namespace swspl.nso
                                                 jumps.Add(jmp);
                                             }
 
-                                            funcStr.Add($"\t{instr.Mnemonic} loc_{jmp}");
+                                            funcStr.Add($"\t{instr.Mnemonic} loc_{(baseAddr + jmp).ToString("X")}");
                                         }
                                         else
                                         {
-                                            funcStr.Add($"\t{instr.Mnemonic} fn_{jmp}");
+                                            funcStr.Add($"\t{instr.Mnemonic} fn_{(baseAddr + jmp).ToString("X")}");
                                         }
                                     }
 
@@ -364,7 +355,7 @@ namespace swspl.nso
                                 // now we get the index into our already obtained list of strings
                                 int funcIdx = (int)offs / 4;
                                 // insert our local string into the function strings...we use the index + indexof to properly account for other jumps already inserted
-                                funcStr.Insert(funcIdx + jumps.IndexOf(jmp), $"loc_{jmp}:");
+                                funcStr.Insert(funcIdx + jumps.IndexOf(jmp), $"loc_{(baseAddr + jmp).ToString("X")}:");
                             }
                         }
 

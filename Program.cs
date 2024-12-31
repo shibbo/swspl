@@ -1,5 +1,6 @@
 ﻿using swspl.nso;
 using System;
+using System.Diagnostics;
 
 class Progam
 {
@@ -33,7 +34,12 @@ class Progam
                 if (args.Length == 2)
                 {
                     string filename = args[1];
+                    Stopwatch sw = new();
+                    sw.Start();
                     NSO nso = new NSO(filename);
+                    sw.Stop();
+                    TimeSpan span = sw.Elapsed;
+                    Console.WriteLine($"NSO::NSO Time -- {span.TotalSeconds} seconds");
                 }
                 else
                 {

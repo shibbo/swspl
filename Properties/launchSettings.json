@@ -2,7 +2,7 @@
   "profiles": {
     "swspl": {
       "commandName": "Project",
-      "commandLineArgs": "split odyssey.nso"
+      "commandLineArgs": "split bf.nso"
     }
   }
 }

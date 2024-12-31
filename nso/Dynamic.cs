@@ -124,12 +124,15 @@ namespace swspl.nso
     {
         public DynamicSymbol(BinaryReader reader)
         {
-            mStrTableOffs = reader.ReadUInt32();
-            mInfo = reader.ReadByte();
-            mOther = reader.ReadByte();
-            mSectionIdx = reader.ReadUInt16();
-            mValue = reader.ReadUInt64();
-            mSize = reader.ReadUInt64();
+            if (reader != null)
+            {
+                mStrTableOffs = reader.ReadUInt32();
+                mInfo = reader.ReadByte();
+                mOther = reader.ReadByte();
+                mSectionIdx = reader.ReadUInt16();
+                mValue = reader.ReadUInt64();
+                mSize = reader.ReadUInt64();
+            }
         }
 
         public uint GetTableOffset()
@@ -159,10 +162,20 @@ namespace swspl.nso
 
         public DynamicSymbol? GetSymbolAtAddr(ulong addr)
         {
-            return mSymbols.Find(s => s.mValue == addr);
+            int index = mSymbols.BinarySearch(
+                new DynamicSymbolStub { mValue = addr },
+                Comparer<DynamicSymbol>.Create((a, b) => a.mValue.CompareTo(b.mValue))
+            );
+
+            return index >= 0 ? mSymbols[index] : null;
         }
 
         public List<DynamicSymbol> mSymbols = new();
+    }
+
+    public class DynamicSymbolStub : DynamicSymbol
+    {
+        public DynamicSymbolStub() : base(null!) { }
     }
 
     public class DynamicStringTable
