@@ -30,6 +30,11 @@ namespace swspl.nso
             return mSize;
         }
 
+        public bool IsInRange(uint offs)
+        {
+            return (offs >= mMemOffset) && (offs <= mMemOffset + mSize);
+        }
+
         uint mOffset;
         uint mMemOffset;
         int mSize;

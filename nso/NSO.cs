@@ -226,12 +226,15 @@ namespace swspl.nso
                     byte[] textBytes = textReader.ReadBytes(remainingText);
                     const Arm64DisassembleMode mode = Arm64DisassembleMode.LittleEndian | Arm64DisassembleMode.Arm;
 
-                    Dictionary<string, List<string>> textfile = new();
+                    Dictionary<ulong, List<string>> textfile = new();
+                    Dictionary<ulong, string> addrToSym = new();
+                    List<ulong> unnamed = new();
                     ulong baseAddr = 0x7100000000;
                     //textfile.Add(".section \".text\", \"ax\"");
 
                     foreach (DynamicSymbol sym in dynTbl.mSymbols)
                     {
+                        string symbolName = strTbl.GetSymbolAtOffs(sym.mStrTableOffs);
                         List<string> funcStr = new();
                         // symbols tied to a size of 0 are not .text
                         if (sym.mSize == 0)
@@ -239,7 +242,24 @@ namespace swspl.nso
                             continue;
                         }
 
-                        string symbolName = strTbl.GetSymbolAtOffs(sym.mStrTableOffs);
+                        /* check to see if our symbol is even in the .text section */
+                        if (!textSeg.IsInRange((uint)sym.mValue - (uint)startPos))
+                        {
+                            continue;
+                        }
+
+                        
+                        // constructors (ctors) and destructors (dtors) have multiple types
+                        // however, clang resolves their addresses to the same function address if there is no need for one of each type
+                        // so here, we filter them out
+                        if (textfile.ContainsKey(sym.mValue + baseAddr))
+                        {
+                            continue;
+                        }
+
+                        addrToSym.Add(sym.mValue + baseAddr, symbolName);
+
+                        
                         long pos = (long)sym.mValue - startPos;
                         byte[] funcBytes = textBytes.Skip((int)pos).Take((int)sym.mSize).ToArray();
 
@@ -282,6 +302,11 @@ namespace swspl.nso
                                     }
                                     else
                                     {
+                                        ulong addr = baseAddr + oper;
+                                        if (!unnamed.Contains(addr))
+                                        {
+                                            unnamed.Add(addr);
+                                        }
                                         jumpSymName = $"bl fn_{(baseAddr + oper).ToString("X")}";
                                     }
 
@@ -359,14 +384,25 @@ namespace swspl.nso
                             }
                         }
 
-                        textfile.Add(symbolName, funcStr);
+                        textfile.Add(baseAddr + sym.mValue, funcStr);
+                    }
+
+                    // now those are the functions that we have symbols for
+                    // let's do the ones that do not have symbols, as they are a bit harder to parse
+                    // let's first order our dictionary
+                    textfile.OrderByDescending(e => e.Key);
+
+                    foreach(ulong offs in unnamed)
+                    {
+                        var nearest = textfile.FirstOrDefault(k => k.Key >= offs);
                     }
 
                     List<string> file = new();
 
-                    foreach(KeyValuePair<string, List<string>> e in textfile) {
-                        file.Add($".global {e.Key}");
-                        file.Add($"{e.Key}:");
+                    foreach(KeyValuePair<ulong, List<string>> e in textfile) {
+                        string sym = addrToSym[e.Key];
+                        file.Add($".global {sym}");
+                        file.Add($"{sym}:");
                         foreach(string str in e.Value)
                         {
                             file.Add(str);
