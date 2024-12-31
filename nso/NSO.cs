@@ -266,7 +266,7 @@ namespace swspl.nso
                                     // TRAP instruction
                                     if (instr.Operand == "0xfe, 0xde, 0xff, 0xe7")
                                     {
-                                        funcStr.Add($"\trap");
+                                        funcStr.Add($"\ttrap");
                                     }
                                 }
                                 // bl need to be defined differently
