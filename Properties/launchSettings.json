@@ -2,7 +2,7 @@
   "profiles": {
     "swspl": {
       "commandName": "Project",
-      "commandLineArgs": "info bf.nso"
+      "commandLineArgs": "nso info bf.nso"
     }
   }
 }
