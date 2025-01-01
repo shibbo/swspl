@@ -31,6 +31,7 @@ namespace swspl.nso
         HashTable mHashTable;
         GNUHashTable mGNUHashTable;
         BuildStr mBuildStr;
+        uint mFlags;
 
         public NSO(string filepath, bool infoOnly)
         {
@@ -49,7 +50,7 @@ namespace swspl.nso
                     // skip the version and reversed sections
                     reader.ReadBytes(8);
 
-                    uint flags = reader.ReadUInt32();
+                    mFlags = reader.ReadUInt32();
                     mTextSegement = new NSOSegment(reader);
                     uint moduleNameOffs = reader.ReadUInt32();
                     mRodataSegment = new NSOSegment(reader);
@@ -79,7 +80,7 @@ namespace swspl.nso
                     // .text
                     reader.BaseStream.Seek(mTextSegement.GetOffset(), SeekOrigin.Begin);
                     // are we compressed?
-                    if ((flags & 0x1) != 0)
+                    if (IsTextCompr())
                     {
                         byte[] bytes = reader.ReadBytes(textCmprSize);
                         mText = new byte[mTextSegement.GetSize()];
@@ -94,7 +95,7 @@ namespace swspl.nso
                     // .rodata
                     reader.BaseStream.Seek(mRodataSegment.GetOffset(), SeekOrigin.Begin);
                     // are we compressed?
-                    if (((flags >> 1) & 0x1) != 0)
+                    if (IsRodataCompr())
                     {
                         byte[] bytes = reader.ReadBytes(roDataCmprSize);
                         mRodata = new byte[mRodataSegment.GetSize()];
@@ -108,7 +109,7 @@ namespace swspl.nso
                     // .data=
                     reader.BaseStream.Seek(mDataSegment.GetOffset(), SeekOrigin.Begin);
                     // are we compressed?
-                    if (((flags >> 2) & 0x1) != 0)
+                    if (IsDataCompr())
                     {
                         byte[] bytes = reader.ReadBytes(dataCmprSize);
                         mData = new byte[mDataSegment.GetSize()];
@@ -233,6 +234,21 @@ namespace swspl.nso
             {
                 throw new Exception("NSO::NSO(string) -- File does not exist.");
             }
+        }
+
+        private bool IsTextCompr()
+        {
+            return (mFlags & 0x1) != 0;
+        }
+
+        private bool IsRodataCompr()
+        {
+            return ((mFlags >> 1) & 0x1) != 0;
+        }
+
+        private bool IsDataCompr()
+        {
+            return ((mFlags >> 2) & 0x1) != 0;
         }
 
         public void ParseTextSegment(byte[] textBytes, long startPos)
@@ -462,28 +478,32 @@ namespace swspl.nso
             Console.WriteLine($"{".data Hash:".PadRight(maxLabelLength)} {dataHash}\n");
 
             Console.WriteLine("============= SEGMENTS =============");
-            Console.WriteLine($"{"Section".PadRight(12)} | {"Offset".PadRight(12)} | {"Memory Offset".PadRight(16)} | {"Size".PadRight(8)}");
-            Console.WriteLine(new string('-', 60));
+            Console.WriteLine($"{"Section".PadRight(12)} | {"Offset".PadRight(12)} | {"Memory Offset".PadRight(16)} | {"Size".PadRight(8)} | {"Compressed?".PadRight(12)}");
+            Console.WriteLine(new string('-', 72));
 
             Console.WriteLine(
                 ".text".PadRight(12) + " | " +
                 $"{mTextSegement.GetOffset():X}".PadRight(12) + " | " +
                 $"{mTextSegement.GetMemoryOffset():X}".PadRight(16) + " | " +
-                $"{mTextSegement.GetSize():X}".PadRight(8)
+                $"{mTextSegement.GetSize():X}".PadRight(8) + " | " +
+                $"{IsTextCompr()}"
+
             );
 
             Console.WriteLine(
                 ".rodata".PadRight(12) + " | " +
                 $"{mRodataSegment.GetOffset():X}".PadRight(12) + " | " +
                 $"{mRodataSegment.GetMemoryOffset():X}".PadRight(16) + " | " +
-                $"{mRodataSegment.GetSize():X}".PadRight(8)
+                $"{mRodataSegment.GetSize():X}".PadRight(8) + " | " +
+                $"{IsRodataCompr()}"
             );
 
             Console.WriteLine(
                 ".data".PadRight(12) + " | " +
                 $"{mDataSegment.GetOffset():X}".PadRight(12) + " | " +
                 $"{mDataSegment.GetMemoryOffset():X}".PadRight(16) + " | " +
-                $"{mDataSegment.GetSize():X}".PadRight(8)
+                $"{mDataSegment.GetSize():X}".PadRight(8) + " | " +
+                $"{IsDataCompr()}"
             );
         }
     }
