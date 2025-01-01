@@ -2,7 +2,7 @@
   "profiles": {
     "swspl": {
       "commandName": "Project",
-      "commandLineArgs": "split bf.nso"
+      "commandLineArgs": "info splatoon2.nso"
     }
   }
 }

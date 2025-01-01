@@ -1,24 +1,40 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Text;
 using K4os.Compression.LZ4;
-using System.Security.Cryptography;
-using System.Diagnostics.SymbolStore;
-using System.Diagnostics.CodeAnalysis;
-using System.Resources;
 using Gee.External.Capstone;
 using Gee.External.Capstone.Arm64;
-using Microsoft.VisualBasic.FileIO;
-using System.ComponentModel;
 
 namespace swspl.nso
 {
     public class NSO
     {
-        public NSO(string filepath)
+        string mFileName;
+        public Dictionary<ulong, List<string>> mTextFile = new();
+        public Dictionary<ulong, string> mAddrToSym = new();
+        private List<ulong> mUnknownFuncs = new();
+        private static readonly ulong BaseAdress = 0x7100000000;
+        private DynamicSymbolTable mSymbolTable;
+        private DynamicStringTable mStringTable;
+        private Dictionary<string, Arm64Instruction[]> mFuncInstructions = new();
+
+        byte[] mTextHash;
+        byte[] mDataHash;
+        byte[] mRoDataHash;
+        byte[] mModuleID;
+        NSOSegment mTextSegement;
+        NSOSegment mRodataSegment;
+        NSOSegment mDataSegment;
+        byte[] mText;
+        byte[] mData;
+        byte[] mRodata;
+        Module mModule;
+        DynamicSegment mDynamicSegment;
+        HashTable mHashTable;
+        GNUHashTable mGNUHashTable;
+        BuildStr mBuildStr;
+
+        public NSO(string filepath, bool infoOnly)
         {
+            mFileName = Path.GetFileName(filepath);
             if (File.Exists(filepath))
             {
                 using (BinaryReader reader = new BinaryReader(File.Open(filepath, FileMode.Open), Encoding.UTF8))
@@ -34,13 +50,13 @@ namespace swspl.nso
                     reader.ReadBytes(8);
 
                     uint flags = reader.ReadUInt32();
-                    NSOSegment textSeg = new NSOSegment(reader);
+                    mTextSegement = new NSOSegment(reader);
                     uint moduleNameOffs = reader.ReadUInt32();
-                    NSOSegment rodataSeg = new NSOSegment(reader);
+                    mRodataSegment = new NSOSegment(reader);
                     uint moduleNameSize = reader.ReadUInt32();
-                    NSOSegment dataSeg = new NSOSegment(reader);
+                    mDataSegment = new NSOSegment(reader);
                     uint bssSize = reader.ReadUInt32();
-                    byte[] moduleID = reader.ReadBytes(0x20);
+                    mModuleID = reader.ReadBytes(0x20);
 
                     // compressed sizes
                     int textCmprSize = reader.ReadInt32();
@@ -55,146 +71,127 @@ namespace swspl.nso
                     uint dynSymOffs = reader.ReadUInt32();
                     uint dynSymSize = reader.ReadUInt32();
 
-                    byte[] textHash = reader.ReadBytes(0x20);
-                    byte[] roDataHash = reader.ReadBytes(0x20);
-                    byte[] dataHash = reader.ReadBytes(0x20);
+                    mTextHash = reader.ReadBytes(0x20);
+                    mRoDataHash = reader.ReadBytes(0x20);
+                    mDataHash = reader.ReadBytes(0x20);
 
                     // now we get the final data for each section
                     // .text
-                    byte[] text;
-                    reader.BaseStream.Seek(textSeg.GetOffset(), SeekOrigin.Begin);
+                    reader.BaseStream.Seek(mTextSegement.GetOffset(), SeekOrigin.Begin);
                     // are we compressed?
                     if ((flags & 0x1) != 0)
                     {
                         byte[] bytes = reader.ReadBytes(textCmprSize);
-                        text = new byte[textSeg.GetSize()];
-                        LZ4Codec.Decode(bytes, text);
+                        mText = new byte[mTextSegement.GetSize()];
+                        LZ4Codec.Decode(bytes, mText);
 
                     }
                     else
                     {
-                        text = reader.ReadBytes(textSeg.GetSize());
+                        mText = reader.ReadBytes(mTextSegement.GetSize());
                     }
 
                     // .rodata
-                    byte[] rodata;
-                    reader.BaseStream.Seek(rodataSeg.GetOffset(), SeekOrigin.Begin);
+                    reader.BaseStream.Seek(mRodataSegment.GetOffset(), SeekOrigin.Begin);
                     // are we compressed?
                     if (((flags >> 1) & 0x1) != 0)
                     {
                         byte[] bytes = reader.ReadBytes(roDataCmprSize);
-                        rodata = new byte[rodataSeg.GetSize()];
-                        LZ4Codec.Decode(bytes, rodata);
+                        mRodata = new byte[mRodataSegment.GetSize()];
+                        LZ4Codec.Decode(bytes, mRodata);
                     }
                     else
                     {
-                        rodata = reader.ReadBytes(rodataSeg.GetSize());
+                        mRodata = reader.ReadBytes(mRodataSegment.GetSize());
                     }
 
-                    // .data
-                    byte[] data;
-                    reader.BaseStream.Seek(dataSeg.GetOffset(), SeekOrigin.Begin);
+                    // .data=
+                    reader.BaseStream.Seek(mDataSegment.GetOffset(), SeekOrigin.Begin);
                     // are we compressed?
                     if (((flags >> 2) & 0x1) != 0)
                     {
                         byte[] bytes = reader.ReadBytes(dataCmprSize);
-                        data = new byte[dataSeg.GetSize()];
-                        LZ4Codec.Decode(bytes, data);
+                        mData = new byte[mDataSegment.GetSize()];
+                        LZ4Codec.Decode(bytes, mData);
                     }
                     else
                     {
-                        data = reader.ReadBytes(dataSeg.GetSize());
+                        mData = reader.ReadBytes(mDataSegment.GetSize());
                     }
-
-                    File.WriteAllBytes($"{filename}_text.bin", text);
-                    File.WriteAllBytes($"{filename}_data.bin", data);
-                    File.WriteAllBytes($"{filename}_rodata.bin", rodata);
 
                     // now let's check our hashes to ensure we have the right data
-                    byte[] textCmprHash = Util.GetSHA(text);
-                    byte[] roDataCmprHash = Util.GetSHA(rodata);
-                    byte[] dataCmprHash = Util.GetSHA(data);
+                    byte[] textCmprHash = Util.GetSHA(mText);
+                    byte[] roDataCmprHash = Util.GetSHA(mRodata);
+                    byte[] dataCmprHash = Util.GetSHA(mData);
 
-                    if (Util.ArrayEqual(textCmprHash, textHash))
-                    {
-                        Console.WriteLine(".text segment hash matches");
-                    }
-                    else
+                    if (!Util.ArrayEqual(textCmprHash, mTextHash))
                     {
                         throw new Exception("NSO::NSO(string) -- .text segment hash mismatch");
                     }
 
-                    if (Util.ArrayEqual(roDataCmprHash, roDataHash))
-                    {
-                        Console.WriteLine(".rodata segment hash matches");
-                    }
-                    else
+                    if (!Util.ArrayEqual(roDataCmprHash, mRoDataHash))
                     {
                         throw new Exception("NSO::NSO(string) -- .rodata segment hash mismatch");
                     }
 
-                    if (Util.ArrayEqual(dataCmprHash, dataHash))
-                    {
-                        Console.WriteLine(".data segment hash matches");
-                    }
-                    else
+                    if (!Util.ArrayEqual(dataCmprHash, mDataHash))
                     {
                         throw new Exception("NSO::NSO(string) -- .data segment hash mismatch");
                     }
 
                     // our data is valid. we can move on to our dynamic stuff
-                    BinaryReader dynReader = new(new MemoryStream(rodata), Encoding.UTF8);
-                    
+                    BinaryReader dynReader = new(new MemoryStream(mRodata), Encoding.UTF8);
+
                     /* .buildstr */
-                    BuildStr buildStr = new(dynReader);
+                    mBuildStr = new(dynReader);
 
                     /* .dynstr */
                     dynReader.BaseStream.Seek(dynStrOffs, SeekOrigin.Begin);
-                    DynamicStringTable strTbl = new(dynReader, dynStrSize);
+                    mStringTable = new(dynReader, dynStrSize);
 
                     /* .dynsym */
                     uint numSyms = dynSymSize / 24;
                     dynReader.BaseStream.Seek(dynSymOffs, SeekOrigin.Begin);
-                    DynamicSymbolTable dynTbl = new(dynReader, numSyms);
+                    mSymbolTable = new(dynReader, numSyms);
 
                     // MOD0
-                    BinaryReader textReader = new(new MemoryStream(text), Encoding.UTF8);
-                    Module module = new(textReader);
+                    BinaryReader textReader = new(new MemoryStream(mText), Encoding.UTF8);
+                    mModule = new(textReader);
 
                     /* .dynamic */
-                    uint dynOffs = module.mDynOffset - dataSeg.GetMemoryOffset();
-                    BinaryReader dataReader = new(new MemoryStream(data), Encoding.UTF8);
+                    uint dynOffs = mModule.mDynOffset - mDataSegment.GetMemoryOffset();
+                    BinaryReader dataReader = new(new MemoryStream(mData), Encoding.UTF8);
                     dataReader.BaseStream.Position = dynOffs;
-                    DynamicSegment seg = new(dataReader);
+                    mDynamicSegment = new(dataReader);
 
                     /* .hash */
-                    long hashOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_HASH) - rodataSeg.GetMemoryOffset();
+                    long hashOffs = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_HASH) - mRodataSegment.GetMemoryOffset();
                     dynReader.BaseStream.Seek(hashOffs, SeekOrigin.Begin);
-                    HashTable hashTbl = new(dynReader);
+                    mHashTable = new(dynReader);
                     /* .gnu_hash */
-                    GNUHashTable gnuHashTbl = new(dynReader);
+                    mGNUHashTable = new(dynReader);
 
                     /* .rela.dyn */
-                    long relocCount = seg.GetRelocationCount();
-                    long relocOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_RELA) - rodataSeg.GetMemoryOffset();
+                    long relocCount = mDynamicSegment.GetRelocationCount();
+                    long relocOffs = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_RELA) - mRodataSegment.GetMemoryOffset();
                     dynReader.BaseStream.Seek(relocOffs, SeekOrigin.Begin);
                     RelocationTable relocTbl = new(dynReader, relocCount);
 
                     /* .rela.plt */
-                    long pltOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_JMPREL) - rodataSeg.GetMemoryOffset();
+                    long pltOffs = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_JMPREL) - mRodataSegment.GetMemoryOffset();
                     dynReader.BaseStream.Seek(pltOffs, SeekOrigin.Begin);
-                    long pltCount = seg.GetTagValue<long>(DynamicSegment.TagType.DT_PLTRELSZ) / 0x14;
+                    long pltCount = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_PLTRELSZ) / 0x14;
                     RelocationPLT plt = new(dynReader, pltCount);
 
                     /* .got.plt */
-                    long gotPltOffs = seg.GetTagValue<long>(DynamicSegment.TagType.DT_PLTGOT) - dataSeg.GetMemoryOffset();
+                    long gotPltOffs = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_PLTGOT) - mDataSegment.GetMemoryOffset();
                     GlobalPLT globalPLT = new(dataReader, plt.GetNumJumps());
 
                     /* .got */
                     long gotStart = dataReader.BaseStream.Position;
                     // getting our .got is a bit more difficult
                     // we do not know where it ends, but we do know it is right after .got.plt ends
-                    long gotEnd = seg.GetTagValue<long>(DynamicSegment.TagType.DT_INIT_ARRAY) - dataSeg.GetMemoryOffset();
+                    long gotEnd = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_INIT_ARRAY) - mDataSegment.GetMemoryOffset();
                     // now let's figure out how many entries we have
                     long gotCount = (gotEnd - gotStart) / 8;
 
@@ -203,6 +200,12 @@ namespace swspl.nso
                     for (int i = 0; i < gotCount; i++)
                     {
                         got.Add(dataReader.ReadInt64());
+                    }
+
+                    /* if we are only dumping info, we can stop here. */
+                    if (infoOnly)
+                    {
+                        return;
                     }
 
                     /* read the rest of our .text */
@@ -221,202 +224,267 @@ namespace swspl.nso
                     long startPos = textReader.BaseStream.Position;
 
                     // now we read the remaining portion of .text and map those instructions to symbols
-                    Dictionary<string, Arm64Instruction[]> funcs = new();
-                    int remainingText = textSeg.GetSize() - (int)textReader.BaseStream.Position;
+                    int remainingText = mTextSegement.GetSize() - (int)textReader.BaseStream.Position;
                     byte[] textBytes = textReader.ReadBytes(remainingText);
-                    const Arm64DisassembleMode mode = Arm64DisassembleMode.LittleEndian | Arm64DisassembleMode.Arm;
-
-                    Dictionary<ulong, List<string>> textfile = new();
-                    Dictionary<ulong, string> addrToSym = new();
-                    List<ulong> unnamed = new();
-                    ulong baseAddr = 0x7100000000;
-                    //textfile.Add(".section \".text\", \"ax\"");
-
-                    foreach (DynamicSymbol sym in dynTbl.mSymbols)
-                    {
-                        string symbolName = strTbl.GetSymbolAtOffs(sym.mStrTableOffs);
-                        List<string> funcStr = new();
-                        // symbols tied to a size of 0 are not .text
-                        if (sym.mSize == 0)
-                        {
-                            continue;
-                        }
-
-                        /* check to see if our symbol is even in the .text section */
-                        if (!textSeg.IsInRange((uint)sym.mValue - (uint)startPos))
-                        {
-                            continue;
-                        }
-
-                        
-                        // constructors (ctors) and destructors (dtors) have multiple types
-                        // however, clang resolves their addresses to the same function address if there is no need for one of each type
-                        // so here, we filter them out
-                        if (textfile.ContainsKey(sym.mValue + baseAddr))
-                        {
-                            continue;
-                        }
-
-                        addrToSym.Add(sym.mValue + baseAddr, symbolName);
-
-                        
-                        long pos = (long)sym.mValue - startPos;
-                        byte[] funcBytes = textBytes.Skip((int)pos).Take((int)sym.mSize).ToArray();
-
-                        List<ulong> jumps = new();
-
-                        using (CapstoneArm64Disassembler dis = CapstoneDisassembler.CreateArm64Disassembler(mode))
-                        {
-                            dis.EnableInstructionDetails = true;
-                            // we have to enable this due to the fact that TRAP is invalid with capstone
-                            dis.EnableSkipDataMode = true;
-                            dis.DisassembleSyntax = DisassembleSyntax.Intel;
-
-                            Arm64Instruction[] instrs = dis.Disassemble(funcBytes, pos + startPos);
-                            funcs.Add(symbolName, instrs);
-
-                            for (int i = 0; i < instrs.Length; i++)
-                            {
-                                Arm64Instruction instr = instrs[i];
-
-                                if (instr.Mnemonic == ".byte")
-                                {
-                                    // TRAP instruction
-                                    if (instr.Operand == "0xfe, 0xde, 0xff, 0xe7")
-                                    {
-                                        funcStr.Add($"\ttrap");
-                                    }
-                                }
-                                // bl need to be defined differently
-                                else  if (instr.Mnemonic == "bl")
-                                {
-                                    ulong oper = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
-
-                                    DynamicSymbol? jumpSym = dynTbl.GetSymbolAtAddr(oper);
-
-                                    string jumpSymName = "";
-
-                                    if (jumpSym != null)
-                                    {
-                                        jumpSymName = $"bl {strTbl.GetSymbolAtOffs(jumpSym.mStrTableOffs)}";
-                                    }
-                                    else
-                                    {
-                                        ulong addr = baseAddr + oper;
-                                        if (!unnamed.Contains(addr))
-                                        {
-                                            unnamed.Add(addr);
-                                        }
-                                        jumpSymName = $"bl fn_{(baseAddr + oper).ToString("X")}";
-                                    }
-
-                                    funcStr.Add($"\t{jumpSymName}");
-                                }
-                                else if (Util.IsBranchInstr(instr.Mnemonic))
-                                {
-                                    if (instr.Mnemonic == "tbz" || instr.Mnemonic == "tbnz")
-                                    {
-                                        // second part of the instruction is the addr itself
-                                        ulong addr = (ulong)instr.Details.Operands[2].Immediate;
-
-                                        if (!jumps.Contains(addr))
-                                        {
-                                            jumps.Add(addr);
-                                        }
-
-                                        funcStr.Add($"\t{instr.Mnemonic} #{instr.Details.Operands[1].Immediate} loc_{(baseAddr + addr).ToString("X")}");
-                                    }
-                                    else if (instr.Mnemonic == "cbz")
-                                    {
-                                        ulong addr = (ulong)instr.Details.Operands[1].Immediate;
-
-                                        if (!jumps.Contains(addr))
-                                        {
-                                            jumps.Add(addr);
-                                        }
-
-                                        funcStr.Add($"\t{instr.Mnemonic} loc_{(baseAddr + addr).ToString("X")}");
-                                    }
-                                    else
-                                    {
-                                        // sometimes the compiler can branch to another function without using BL
-                                        // make sure we account for it
-                                        ulong jmp = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
-                                        ulong range = (ulong)pos + sym.mSize;
-                                        // is our jump in range of our current function?
-                                        // if it is, it is a local branch
-                                        // if not, it is a function call
-                                        if (jmp >= (ulong)pos && jmp <= range)
-                                        {
-                                            // avoid duplicating jumps
-                                            if (!jumps.Contains(jmp))
-                                            {
-                                                jumps.Add(jmp);
-                                            }
-
-                                            funcStr.Add($"\t{instr.Mnemonic} loc_{(baseAddr + jmp).ToString("X")}");
-                                        }
-                                        else
-                                        {
-                                            funcStr.Add($"\t{instr.Mnemonic} fn_{(baseAddr + jmp).ToString("X")}");
-                                        }
-                                    }
-
-                                }
-                                else
-                                {
-                                    funcStr.Add($"\t{instr}");
-                                }
-                            }
-
-                            // sort our offsets so we can properly insert them without screwing up other indicies
-                            jumps.Sort();
-
-                            // now let's resolve our jumps
-                            foreach(ulong jmp in jumps)
-                            {
-                                // figure out the offset within the function to insert our instruction at
-                                ulong offs = jmp - sym.mValue;
-                                // now we get the index into our already obtained list of strings
-                                int funcIdx = (int)offs / 4;
-                                // insert our local string into the function strings...we use the index + indexof to properly account for other jumps already inserted
-                                funcStr.Insert(funcIdx + jumps.IndexOf(jmp), $"loc_{(baseAddr + jmp).ToString("X")}:");
-                            }
-                        }
-
-                        textfile.Add(baseAddr + sym.mValue, funcStr);
-                    }
-
-                    // now those are the functions that we have symbols for
-                    // let's do the ones that do not have symbols, as they are a bit harder to parse
-                    // let's first order our dictionary
-                    textfile.OrderByDescending(e => e.Key);
-
-                    foreach(ulong offs in unnamed)
-                    {
-                        var nearest = textfile.FirstOrDefault(k => k.Key >= offs);
-                    }
-
-                    List<string> file = new();
-
-                    foreach(KeyValuePair<ulong, List<string>> e in textfile) {
-                        string sym = addrToSym[e.Key];
-                        file.Add($".global {sym}");
-                        file.Add($"{sym}:");
-                        foreach(string str in e.Value)
-                        {
-                            file.Add(str);
-                        }
-                        file.Add("\n");
-                    }
-
-                    File.WriteAllLines("text.s", file.ToArray());
+                    ParseTextSegment(textBytes, startPos);
                 }
             }
             else
             {
                 throw new Exception("NSO::NSO(string) -- File does not exist.");
             }
+        }
+
+        public void ParseTextSegment(byte[] textBytes, long startPos)
+        {
+            foreach (DynamicSymbol sym in mSymbolTable.mSymbols)
+            {
+                string symbolName = mStringTable.GetSymbolAtOffs(sym.mStrTableOffs);
+                // symbols tied to a size of 0 are not .text
+                if (sym.mSize == 0)
+                {
+                    continue;
+                }
+
+                /* check to see if our symbol is even in the .text section */
+                if (!mTextSegement.IsInRange((uint)sym.mValue - (uint)startPos))
+                {
+                    continue;
+                }
+
+                // constructors (ctors) and destructors (dtors) have multiple types
+                // however, clang resolves their addresses to the same function address if there is no need for one of each type
+                // so here, we filter them out
+                if (mTextFile.ContainsKey(sym.mValue + BaseAdress))
+                {
+                    continue;
+                }
+
+                mAddrToSym.Add(sym.mValue + BaseAdress, symbolName);
+                long pos = (long)sym.mValue - startPos;
+                byte[] funcBytes = textBytes.Skip((int)pos).Take((int)sym.mSize).ToArray();
+                ParseFunction(sym, symbolName, funcBytes, pos, pos + startPos);
+            }
+
+            // now those are the functions that we have symbols for
+            // let's do the ones that do not have symbols, as they are a bit harder to parse
+            // let's first order our dictionary
+            mTextFile.OrderByDescending(e => e.Key);
+
+            foreach (ulong offs in mUnknownFuncs)
+            {
+                var nearest = mTextFile.FirstOrDefault(k => k.Key >= offs);
+
+                if (nearest.Value != null)
+                {
+                    ulong funcSize = nearest.Key - offs;
+                    long pos = (long)offs - startPos;
+                    byte[] funcBytes = textBytes.Skip((int)pos).Take((int)funcSize).ToArray();
+                }
+                else
+                {
+
+                }
+            }
+        }
+
+        private void ParseFunction(DynamicSymbol sym, string symbolName, byte[] funcBytes, long pos, long startOffset)
+        {
+            List<ulong> jumps = new();
+            List<string> funcStr = new();
+
+            using (CapstoneArm64Disassembler dis = CapstoneDisassembler.CreateArm64Disassembler(Arm64DisassembleMode.LittleEndian | Arm64DisassembleMode.Arm))
+            {
+                dis.EnableInstructionDetails = true;
+                // we have to enable this due to the fact that TRAP is invalid with capstone
+                dis.EnableSkipDataMode = true;
+                dis.DisassembleSyntax = DisassembleSyntax.Intel;
+
+                Arm64Instruction[] instrs = dis.Disassemble(funcBytes, startOffset);
+                mFuncInstructions.Add(symbolName, instrs);
+
+                for (int i = 0; i < instrs.Length; i++)
+                {
+                    Arm64Instruction instr = instrs[i];
+
+                    if (instr.Mnemonic == ".byte")
+                    {
+                        // TRAP instruction
+                        if (instr.Operand == "0xfe, 0xde, 0xff, 0xe7")
+                        {
+                            funcStr.Add($"\ttrap");
+                        }
+                    }
+                    // bl need to be defined differently
+                    else if (instr.Mnemonic == "bl")
+                    {
+                        ulong oper = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
+
+                        DynamicSymbol? jumpSym = mSymbolTable.GetSymbolAtAddr(oper);
+
+                        string jumpSymName = "";
+
+                        if (jumpSym != null)
+                        {
+                            jumpSymName = $"bl {mStringTable.GetSymbolAtOffs(jumpSym.mStrTableOffs)}";
+                        }
+                        else
+                        {
+                            ulong addr = BaseAdress + oper;
+                            if (!mUnknownFuncs.Contains(addr))
+                            {
+                                mUnknownFuncs.Add(addr);
+                            }
+                            jumpSymName = $"bl fn_{(BaseAdress + oper).ToString("X")}";
+                        }
+
+                        funcStr.Add($"\t{jumpSymName}");
+                    }
+                    else if (Util.IsBranchInstr(instr.Mnemonic))
+                    {
+                        if (instr.Mnemonic == "tbz" || instr.Mnemonic == "tbnz")
+                        {
+                            // second part of the instruction is the addr itself
+                            ulong addr = (ulong)instr.Details.Operands[2].Immediate;
+
+                            if (!jumps.Contains(addr))
+                            {
+                                jumps.Add(addr);
+                            }
+
+                            funcStr.Add($"\t{instr.Mnemonic} #{instr.Details.Operands[1].Immediate} loc_{(BaseAdress + addr).ToString("X")}");
+                        }
+                        else if (instr.Mnemonic == "cbz")
+                        {
+                            ulong addr = (ulong)instr.Details.Operands[1].Immediate;
+
+                            if (!jumps.Contains(addr))
+                            {
+                                jumps.Add(addr);
+                            }
+
+                            funcStr.Add($"\t{instr.Mnemonic} loc_{(BaseAdress + addr).ToString("X")}");
+                        }
+                        else
+                        {
+                            // sometimes the compiler can branch to another function without using BL
+                            // make sure we account for it
+                            ulong jmp = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
+                            ulong range = (ulong)pos + sym.mSize;
+                            // is our jump in range of our current function?
+                            // if it is, it is a local branch
+                            // if not, it is a function call
+                            if (jmp >= (ulong)pos && jmp <= range)
+                            {
+                                // avoid duplicating jumps
+                                if (!jumps.Contains(jmp))
+                                {
+                                    jumps.Add(jmp);
+                                }
+
+                                funcStr.Add($"\t{instr.Mnemonic} loc_{(BaseAdress + jmp).ToString("X")}");
+                            }
+                            else
+                            {
+                                funcStr.Add($"\t{instr.Mnemonic} fn_{(BaseAdress + jmp).ToString("X")}");
+                            }
+                        }
+
+                    }
+                    else
+                    {
+                        funcStr.Add($"\t{instr}");
+                    }
+                }
+
+                // sort our offsets so we can properly insert them without screwing up other indicies
+                jumps.Sort();
+
+                // now let's resolve our jumps
+                foreach (ulong jmp in jumps)
+                {
+                    // figure out the offset within the function to insert our instruction at
+                    ulong offs = jmp - sym.mValue;
+                    // now we get the index into our already obtained list of strings
+                    int funcIdx = (int)offs / 4;
+                    // insert our local string into the function strings...we use the index + indexof to properly account for other jumps already inserted
+                    funcStr.Insert(funcIdx + jumps.IndexOf(jmp), $"loc_{(BaseAdress + jmp).ToString("X")}:");
+                }
+            }
+
+            mTextFile.Add(BaseAdress + sym.mValue, funcStr);
+        }
+
+        public void SaveToFile()
+        {
+            List<string> file = new();
+
+            foreach (KeyValuePair<ulong, List<string>> e in mTextFile)
+            {
+                string sym = mAddrToSym[e.Key];
+                file.Add($".global {sym}");
+                file.Add($"{sym}:");
+                foreach (string str in e.Value)
+                {
+                    file.Add(str);
+                }
+                file.Add("\n");
+            }
+
+            File.WriteAllLines("text.s", file.ToArray());
+        }
+
+        public void ExportSectionBinaries()
+        {
+            File.WriteAllBytes($"{mFileName}_text.bin", mText);
+            File.WriteAllBytes($"{mFileName}_data.bin", mData);
+            File.WriteAllBytes($"{mFileName}_rodata.bin", mRodata);
+        }
+
+        public void PrintInfo()
+        {
+            Console.WriteLine("============= GENERAL =============");
+            string moduleId = "0x" + String.Join("", Array.ConvertAll(mModuleID, value => $"{value:X}"));
+            Console.WriteLine($"Module ID: {moduleId}\n");
+
+            Console.WriteLine($"Build String: {mBuildStr.GetBuildStr()}\n");
+
+            string textHash = "0x" + String.Join("", Array.ConvertAll(mTextHash, value => $"{value:X}"));
+            string rodataHash = "0x" + String.Join("", Array.ConvertAll(mRoDataHash, value => $"{value:X}"));
+            string dataHash = "0x" + String.Join("", Array.ConvertAll(mDataHash, value => $"{value:X}"));
+
+            int maxLabelLength = Math.Max(".text Hash:".Length,
+                                    Math.Max(".rodata Hash:".Length, ".data Hash:".Length));
+
+            Console.WriteLine("============= HASHES =============");
+            Console.WriteLine($"{".text Hash:".PadRight(maxLabelLength)} {textHash}");
+            Console.WriteLine($"{".rodata Hash:".PadRight(maxLabelLength)} {rodataHash}");
+            Console.WriteLine($"{".data Hash:".PadRight(maxLabelLength)} {dataHash}\n");
+
+            Console.WriteLine("============= SEGMENTS =============");
+            Console.WriteLine($"{"Section".PadRight(12)} | {"Offset".PadRight(12)} | {"Memory Offset".PadRight(16)} | {"Size".PadRight(8)}");
+            Console.WriteLine(new string('-', 60));
+
+            Console.WriteLine(
+                ".text".PadRight(12) + " | " +
+                $"{mTextSegement.GetOffset():X}".PadRight(12) + " | " +
+                $"{mTextSegement.GetMemoryOffset():X}".PadRight(16) + " | " +
+                $"{mTextSegement.GetSize():X}".PadRight(8)
+            );
+
+            Console.WriteLine(
+                ".rodata".PadRight(12) + " | " +
+                $"{mRodataSegment.GetOffset():X}".PadRight(12) + " | " +
+                $"{mRodataSegment.GetMemoryOffset():X}".PadRight(16) + " | " +
+                $"{mRodataSegment.GetSize():X}".PadRight(8)
+            );
+
+            Console.WriteLine(
+                ".data".PadRight(12) + " | " +
+                $"{mDataSegment.GetOffset():X}".PadRight(12) + " | " +
+                $"{mDataSegment.GetMemoryOffset():X}".PadRight(16) + " | " +
+                $"{mDataSegment.GetSize():X}".PadRight(8)
+            );
         }
     }
 }

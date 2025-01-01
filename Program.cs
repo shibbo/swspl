@@ -30,16 +30,25 @@ class Progam
                 }
                 break;
 
+            case "info":
+                {
+                    string filename = args[1];
+                    NSO nso = new NSO(filename, true);
+                    nso.PrintInfo();
+                    break;
+                }
+
             case "split":
                 if (args.Length == 2)
                 {
                     string filename = args[1];
                     Stopwatch sw = new();
                     sw.Start();
-                    NSO nso = new NSO(filename);
+                    NSO nso = new NSO(filename, false);
                     sw.Stop();
                     TimeSpan span = sw.Elapsed;
                     Console.WriteLine($"NSO::NSO Time -- {span.TotalSeconds} seconds");
+                    nso.SaveToFile();
                 }
                 else
                 {

@@ -21,6 +21,11 @@ namespace swspl.nso
             return mBuildStr.Length;
         }
 
+        public string GetBuildStr()
+        {
+            return mBuildStr;
+        }
+
         string mBuildStr;
     }
 }
