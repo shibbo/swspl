@@ -31,11 +31,12 @@ namespace swspl.nso
         HashTable mHashTable;
         GNUHashTable mGNUHashTable;
         BuildStr mBuildStr;
+        RelocationTable mRelocTable;
         uint mFlags;
 
         public NSO(string filepath, bool infoOnly)
         {
-            mFileName = Path.GetFileName(filepath);
+            mFileName = Path.GetFileNameWithoutExtension(filepath);
             if (File.Exists(filepath))
             {
                 using (BinaryReader reader = new BinaryReader(File.Open(filepath, FileMode.Open), Encoding.UTF8))
@@ -176,7 +177,7 @@ namespace swspl.nso
                     long relocCount = mDynamicSegment.GetRelocationCount();
                     long relocOffs = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_RELA) - mRodataSegment.GetMemoryOffset();
                     dynReader.BaseStream.Seek(relocOffs, SeekOrigin.Begin);
-                    RelocationTable relocTbl = new(dynReader, relocCount);
+                    mRelocTable = new(dynReader, relocCount);
 
                     /* .rela.plt */
                     long pltOffs = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_JMPREL) - mRodataSegment.GetMemoryOffset();
@@ -447,14 +448,17 @@ namespace swspl.nso
                 file.Add("\n");
             }
 
-            File.WriteAllLines("text.s", file.ToArray());
+            Directory.CreateDirectory($"{mFileName}\\asm");
+            File.WriteAllLines($"{mFileName}\\asm\\text.s", file.ToArray());
+            ExportSectionBinaries();
         }
 
         public void ExportSectionBinaries()
         {
-            File.WriteAllBytes($"{mFileName}_text.bin", mText);
-            File.WriteAllBytes($"{mFileName}_data.bin", mData);
-            File.WriteAllBytes($"{mFileName}_rodata.bin", mRodata);
+            Directory.CreateDirectory($"{mFileName}\\bin");
+            File.WriteAllBytes($"{mFileName}\\bin\\text.bin", mText);
+            File.WriteAllBytes($"{mFileName}\\bin\\data.bin", mData);
+            File.WriteAllBytes($"{mFileName}\\bin\\rodata.bin", mRodata);
         }
 
         public void PrintInfo()
@@ -503,8 +507,119 @@ namespace swspl.nso
                 $"{mDataSegment.GetOffset():X}".PadRight(12) + " | " +
                 $"{mDataSegment.GetMemoryOffset():X}".PadRight(16) + " | " +
                 $"{mDataSegment.GetSize():X}".PadRight(8) + " | " +
-                $"{IsDataCompr()}"
+                $"{IsDataCompr()}\n"
             );
+
+            Console.WriteLine("============= DYNAMIC =============");
+            Console.WriteLine($"{"Tag".PadRight(24)} | {"Value".PadRight(24)}");
+            Console.WriteLine(new string('-', 48));
+
+            foreach(KeyValuePair<DynamicSegment.TagType, object> kvp in mDynamicSegment.mTags)
+            {
+                string? val = "";
+                if (kvp.Key == DynamicSegment.TagType.DT_NEEDED)
+                {
+                    var neededArr = kvp.Value as List<long>;
+
+                    if (neededArr != null)
+                    {
+                        val = "[";
+
+                        for (int i = 0; i < neededArr.Count; i++)
+                        {
+                            val += $" {neededArr[i].ToString("X")} ";
+                        }
+
+                        val += "]";
+                    }
+                }
+                else
+                {
+                    if (kvp.Value is long)
+                    {
+                        long v = (long)kvp.Value;
+                        val = "0x" + v.ToString("X");
+                    }
+                    else
+                    {
+                        val = kvp.Value.ToString();
+                    }
+                    
+                }
+
+                if (val != null)
+                {
+                    Console.WriteLine(
+                        $"{kvp.Key.ToString().PadRight(24)} | " +
+                        $"{val.PadRight(24)}"
+                    );
+                }                
+            }
+            Console.WriteLine("\n");
+
+            Console.WriteLine("============= .rela.dyn =============");
+            Console.WriteLine($".rela.dyn contains {mRelocTable.mRelocs.Count} entries.\n");
+
+            Console.WriteLine($"{"Offset".PadRight(12)} | {"Info".PadRight(12)} | {"Type".PadRight(16)} | {"Value".PadRight(8)} | {"Sym Name + Addend".PadRight(12)}");
+            Console.WriteLine(new string('-', 84));
+
+            foreach (DynamicReloc reloc in mRelocTable.mRelocs)
+            {
+                string symVal = "";
+                string addend = $"0x{reloc.GetAddend()}";
+                if (reloc.GetRelocType() == RelocType.R_AARCH64_RELATIVE)
+                {
+                    symVal = "             ";
+                }
+                else if (reloc.GetRelocType() == RelocType.R_AARCH64_ABS64 || reloc.GetRelocType() == RelocType.R_AARCH64_GLOB_DAT)
+                {
+                    var sym = mSymbolTable.mSymbols[(int)reloc.GetSymIdx()];
+                    string symb = mStringTable.GetSymbolAtOffs(sym.mStrTableOffs);
+                    addend = $"{symb} + {reloc.GetAddend().ToString("X")}";
+                }
+                else 
+                {
+                    symVal = reloc.GetSymIdx().ToString("X");
+                }
+
+                Console.WriteLine(
+                    $"0x{reloc.GetOffset().ToString("X")}".PadRight(12) + " | " +
+                    $"0x{reloc.GetInfo().ToString("X")}".PadRight(12) + " | " +
+                    $"{reloc.GetRelocType()}".PadRight(16) + " | " +
+                    $"{symVal}".PadRight(12) + " | " +
+                    $"{addend}".PadRight(12)
+                );
+            }
+
+            Console.WriteLine("\n");
+
+            Console.WriteLine("============= .dynsym =============");
+
+            Console.WriteLine($"{"Num".PadRight(4)} | {"Value".PadRight(12)} | {"Size".PadRight(8)} | {"Type".PadRight(8)} | {"Bind".PadRight(8)} | {"Vis".PadRight(8)} | {"Ndx".PadRight(2)} | {"Name".PadRight(8)}");
+            Console.WriteLine(new string('-', 120));
+
+            foreach (DynamicSymbol sym in mSymbolTable.mSymbols)
+            {
+                string symName = mStringTable.GetSymbolAtOffs((int)sym.mStrTableOffs);
+
+                string sectionIdx = sym.GetSectionIdx().ToString();
+
+                if (sym.mSectionIdx == 0)
+                {
+                    sectionIdx = "UND";
+                }
+
+                Console.WriteLine(
+                    $"{mSymbolTable.mSymbols.IndexOf(sym)}:".PadRight(4) + " | " +
+                    $"{sym.GetValue()}".PadRight(12) + " | " +
+                    $"{sym.GetSize()}".PadRight(8) + " | " +
+                    $"{sym.GetSymType()}".PadRight(8) + " | " +
+                    $"{sym.GetBind()}".PadRight(8) + " | " +
+                    $"{sym.GetVisibility()}".PadRight(8) + " | " +
+                    $"{sectionIdx}".PadRight(2) + " | " +
+                    $"{symName}".PadRight(8)
+                );
+            }
         }
     }
 }

@@ -4,11 +4,6 @@ using System.Diagnostics;
 
 class Progam
 {
-    static Dictionary<string, string> options = new()
-    {
-        { "help", "Shows this prompt." }
-    };
-
     static void Main(string[] args)
     {
         if (args.Length == 0)
@@ -29,6 +24,14 @@ class Progam
                     ShowHelp();
                 }
                 break;
+
+            case "dump":
+                {
+                    string filename = args[1];
+                    NSO nso = new NSO(filename, true);
+                    nso.ExportSectionBinaries();
+                    break;
+                }
 
             case "info":
                 {
@@ -68,6 +71,7 @@ class Progam
         Console.WriteLine("  swspl.exe -help [option]");
         Console.WriteLine("Options:");
         Console.WriteLine("  split   Splits the given file into assembly.");
+        Console.WriteLine("  dump   Exports binaries (decompressed) of each section of an NSO.");
         Console.WriteLine("  info   Exports information about the given file.");
         Console.WriteLine();
         Console.WriteLine("Use 'swspl.exe -help option' to get more details about a specific option.");
@@ -77,6 +81,9 @@ class Progam
     {
         switch (opt.ToLower())
         {
+            case "dump":
+                Console.WriteLine("Exports binaries (decompressed) of each section of an NSO.");
+                break;
             case "split":
                 Console.WriteLine("Splits the given file into multiple parts and exports their assembly.");
                 break;

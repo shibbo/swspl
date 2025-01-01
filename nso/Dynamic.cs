@@ -117,11 +117,39 @@ namespace swspl.nso
             return GetTagValue<long>(TagType.DT_RELASZ) / GetTagValue<long>(TagType.DT_RELAENT);
         }
 
-        Dictionary<TagType, object> mTags = new();
+        
+
+        public Dictionary<TagType, object> mTags = new();
     }
 
     public class DynamicSymbol
     {
+        public enum Bind
+        {
+            STB_LOCAL = 0,
+            STB_GLOBAL = 1,
+            STB_WEAK = 2
+        }
+
+        public enum Type
+        {
+            STT_NOTYPE = 0,
+            STT_OBJECT = 1,
+            STT_FUNC = 2,
+            STT_SECTION = 3,
+            STT_FILE = 4,
+            STT_COMMON = 5,
+            STT_TLS = 6
+        }
+
+        public enum Vis
+        {
+            STV_DEFAULT = 0,
+            STV_INTERNAL = 1,
+            STV_HIDDEN = 2,
+            STV_PROTECTED = 3
+        }
+
         public DynamicSymbol(BinaryReader reader)
         {
             if (reader != null)
@@ -132,6 +160,10 @@ namespace swspl.nso
                 mSectionIdx = reader.ReadUInt16();
                 mValue = reader.ReadUInt64();
                 mSize = reader.ReadUInt64();
+
+                mBind = (Bind)(mInfo >> 4);
+                mType = (Type)(mInfo & 0xF);
+                mVisibility = (Vis)(mOther & 0x3);
             }
         }
 
@@ -140,12 +172,45 @@ namespace swspl.nso
             return mStrTableOffs;
         }
 
+        public Bind GetBind()
+        {
+            return mBind;
+        }
+
+        public Type GetSymType()
+        {
+            return mType;
+        }
+
+        public Vis GetVisibility()
+        {
+            return mVisibility;
+        }
+
+        public ushort GetSectionIdx()
+        {
+            return mSectionIdx;
+        }
+
+        public ulong GetSize()
+        {
+            return mSize;
+        }
+
+        public ulong GetValue()
+        {
+            return mValue;
+        }
+
         public uint mStrTableOffs;
         public ulong mValue;
         public ulong mSize;
         public byte mInfo;
         public byte mOther;
         public ushort mSectionIdx;
+        Bind mBind;
+        Type mType;
+        Vis mVisibility;
     }
     public class DynamicSymbolTable
     {

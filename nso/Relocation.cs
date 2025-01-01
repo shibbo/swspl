@@ -14,7 +14,8 @@ namespace swspl.nso
         R_AARCH64_RELATIVE = 1027,
         R_AARCH64_TLS_TPREL64 = 1030,
         R_AARCH64_TLS_DTPREL32 = 1031,
-        R_AARCH64_IRELATIVE = 1032
+        R_AARCH64_IRELATIVE = 1032,
+        R_AARCH64_ABS64 = 257
     }
 
     public class RelocationTable
@@ -28,7 +29,7 @@ namespace swspl.nso
             }
         }
 
-        List<DynamicReloc> mRelocs = new();
+        public List<DynamicReloc> mRelocs = new();
     }
 
     public class DynamicReloc
@@ -39,12 +40,38 @@ namespace swspl.nso
             mInfo = reader.ReadUInt64();
             mAddend = reader.ReadInt64();
 
-            ulong symIdx = mInfo >> 32;
+            mSymIdx = mInfo >> 32;
             mRelocType = (RelocType)(mInfo & 0xFFFFFFFF);
+        }
+        
+        public ulong GetOffset()
+        {
+            return mOffset;
+        }
+
+        public ulong GetInfo()
+        {
+            return mInfo;
+        }
+
+        public ulong GetSymIdx()
+        {
+            return mSymIdx;
+        }
+
+        public long GetAddend()
+        {
+            return mAddend;
+        }
+
+        public RelocType GetRelocType()
+        {
+            return mRelocType;
         }
 
         ulong mOffset;
         ulong mInfo;
+        ulong mSymIdx;
         long mAddend;
         public RelocType mRelocType;
     }
