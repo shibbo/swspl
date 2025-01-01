@@ -361,7 +361,7 @@ namespace swspl.nso
                         /* we will only run into these on unnamed functions */
                         else if (instr.Operand == "0x00, 0x00, 0x00, 0x00")
                         {
-                            instrs = instrs.Take(i - 1).ToArray();
+                            instrs = instrs.Take(i).ToArray();
                             break;
                         }
                     }
