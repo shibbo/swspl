@@ -286,26 +286,53 @@ namespace swspl.nso
             // now those are the functions that we have symbols for
             // let's do the ones that do not have symbols, as they are a bit harder to parse
             // let's first order our dictionary
-            mTextFile.OrderByDescending(e => e.Key);
+            mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
 
-            foreach (ulong offs in mUnknownFuncs)
+            List<ulong> remainingUnknowns = mUnknownFuncs.ToList();
+            HashSet<ulong> processedOffsets = new(); // Keep track of processed offsets
+
+            while (remainingUnknowns.Count > 0)
             {
+                ulong offs = remainingUnknowns[0];
+                remainingUnknowns.RemoveAt(0);
+
+                if (processedOffsets.Contains(offs))
+                {
+                    continue;
+                }
+
+                processedOffsets.Add(offs);
+
                 var nearest = mTextFile.FirstOrDefault(k => k.Key >= offs);
 
                 if (nearest.Value != null)
                 {
                     ulong funcSize = nearest.Key - offs;
-                    long pos = (long)offs - startPos;
+                    long pos = ((long)offs - (long)BaseAdress) - startPos;
                     byte[] funcBytes = textBytes.Skip((int)pos).Take((int)funcSize).ToArray();
+                    if (!mFuncInstructions.ContainsKey($"fn_{offs:X}"))
+                    {
+                        ParseFunction(funcSize, (offs - (ulong)BaseAdress), $"fn_{offs:X}", funcBytes, pos, pos + startPos);
+                        mAddrToSym.Add(offs, $"fn_{offs:X}");
+                    }
                 }
-                else
-                {
 
+                foreach (ulong newOffs in mUnknownFuncs.Except(remainingUnknowns).Except(processedOffsets))
+                {
+                    remainingUnknowns.Add(newOffs);
                 }
             }
+
+            // reorder them again
+            mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
         }
 
         private void ParseFunction(DynamicSymbol sym, string symbolName, byte[] funcBytes, long pos, long startOffset)
+        {
+            ParseFunction(sym.mSize, sym.mValue, symbolName, funcBytes, pos, startOffset);
+        }
+
+        private void ParseFunction(ulong size, ulong symAddr, string symbolName, byte[] funcBytes, long pos, long startOffset)
         {
             List<ulong> jumps = new();
             List<string> funcStr = new();
@@ -330,6 +357,12 @@ namespace swspl.nso
                         if (instr.Operand == "0xfe, 0xde, 0xff, 0xe7")
                         {
                             funcStr.Add($"\ttrap");
+                        }
+                        /* we will only run into these on unnamed functions */
+                        else if (instr.Operand == "0x00, 0x00, 0x00, 0x00")
+                        {
+                            instrs = instrs.Take(i - 1).ToArray();
+                            break;
                         }
                     }
                     // bl need to be defined differently
@@ -387,7 +420,7 @@ namespace swspl.nso
                             // sometimes the compiler can branch to another function without using BL
                             // make sure we account for it
                             ulong jmp = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
-                            ulong range = (ulong)pos + sym.mSize;
+                            ulong range = (ulong)pos + size;
                             // is our jump in range of our current function?
                             // if it is, it is a local branch
                             // if not, it is a function call
@@ -421,7 +454,7 @@ namespace swspl.nso
                 foreach (ulong jmp in jumps)
                 {
                     // figure out the offset within the function to insert our instruction at
-                    ulong offs = jmp - sym.mValue;
+                    ulong offs = jmp - symAddr;
                     // now we get the index into our already obtained list of strings
                     int funcIdx = (int)offs / 4;
                     // insert our local string into the function strings...we use the index + indexof to properly account for other jumps already inserted
@@ -429,7 +462,7 @@ namespace swspl.nso
                 }
             }
 
-            mTextFile.Add(BaseAdress + sym.mValue, funcStr);
+            mTextFile.Add(BaseAdress + symAddr, funcStr);
         }
 
         public void SaveToFile()

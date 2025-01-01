@@ -66,6 +66,25 @@ class Program
                 }
                 break;
 
+            case "split":
+                if (args.Length < 3)
+                {
+                    Console.WriteLine($"Error: The '{primaryCommand} info' command requires a filename.");
+                    return;
+                }
+
+                filename = args[2];
+                if (primaryCommand == "nso")
+                {
+                    NSO nso = new NSO(filename, false);
+                    nso.SaveToFile();
+                }
+                else if (primaryCommand == "nro")
+                {
+
+                }
+                break;
+
             default:
                 Console.WriteLine($"Unknown subcommand '{subCommand}' for '{primaryCommand}'.");
                 break;
