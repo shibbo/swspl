@@ -272,6 +272,11 @@ namespace swspl.nso
             return "UNK";
         }
 
+        public String GetSymbolAtIdx(int idx)
+        {
+            return mStringTable.Values.ElementAt(idx);
+        }
+
         Dictionary<long, String> mStringTable = new();
     }
 }

@@ -29,6 +29,11 @@ namespace swspl.nso
             }
         }
 
+        public DynamicReloc? GetRelocationAtOffset(ulong offset)
+        {
+            return mRelocs.Find(r => r.GetOffset() == offset);
+        }
+
         public List<DynamicReloc> mRelocs = new();
     }
 
@@ -42,6 +47,11 @@ namespace swspl.nso
 
             mSymIdx = mInfo >> 32;
             mRelocType = (RelocType)(mInfo & 0xFFFFFFFF);
+
+            if (mOffset == 0x1aa2ce8)
+            {
+
+            }
         }
         
         public ulong GetOffset()

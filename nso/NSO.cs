@@ -15,6 +15,7 @@ namespace swspl.nso
         private DynamicSymbolTable mSymbolTable;
         private DynamicStringTable mStringTable;
         private Dictionary<string, Arm64Instruction[]> mFuncInstructions = new();
+        //private Dictionary<ulong, long> mGlobalOffsTbl = new();
 
         byte[] mTextHash;
         byte[] mDataHash;
@@ -195,13 +196,70 @@ namespace swspl.nso
                     // we do not know where it ends, but we do know it is right after .got.plt ends
                     long gotEnd = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_INIT_ARRAY) - mDataSegment.GetMemoryOffset();
                     // now let's figure out how many entries we have
-                    long gotCount = (gotEnd - gotStart) / 8;
+                    ulong gotCount = (ulong)(gotEnd - gotStart) / 8;
+                    // jump to our memory offset in .got itself to make identifying relocations easier
+                    ulong baseAddr = (ulong)(gotStart + mDataSegment.GetMemoryOffset());
 
-                    List<long> got = new();
+                    List<string> gotFile = new();
+                    gotFile.Add(".section \".got\"\n");
 
-                    for (int i = 0; i < gotCount; i++)
+                    for (ulong i = 0; i < gotCount; i++)
                     {
-                        got.Add(dataReader.ReadInt64());
+                        ulong addr = baseAddr + (i * 8);
+                        gotFile.Add($"off_{(BaseAdress + addr).ToString("X")}:");
+                        DynamicReloc? reloc = mRelocTable.GetRelocationAtOffset(addr);
+
+                        if (reloc != null)
+                        {
+                            switch (reloc.mRelocType)
+                            {
+                                case RelocType.R_AARCH64_RELATIVE:
+                                    string addend = ((long)BaseAdress + reloc.GetAddend()).ToString("X");
+                                    gotFile.Add($"\t.quad 0x{addend}");
+                                    break;
+                                case RelocType.R_AARCH64_GLOB_DAT:
+                                case RelocType.R_AARCH64_ABS64:
+                                    DynamicSymbol? curSym = mSymbolTable.mSymbols[(int)reloc.GetSymIdx()];
+                                    gotFile.Add($"\t.quad {mStringTable.GetSymbolAtOffs(curSym.mStrTableOffs)}");
+                                    break;
+                            }
+                        }
+                    }
+
+
+
+                    // .dynamic is always after .data in my testing, so we can use that as a reference point to know our data size
+                    // the data we are relocating is going to be 8-byte values so we go from there
+                    List<string> dataFile = new();
+
+                    ulong numDataEntries = dynOffs / 8;
+                    ulong dataBaseOffs = mDataSegment.GetMemoryOffset();
+                    for (ulong i = 0; i < numDataEntries; i += 8)
+                    {
+                        ulong addr = dataBaseOffs + i;
+                        DynamicReloc? reloc = mRelocTable.GetRelocationAtOffset(addr);
+
+                        if (reloc != null)
+                        {
+                            DynamicSymbol? sym = mSymbolTable.GetSymbolAtAddr(addr);
+
+                            if (sym != null)
+                            {
+                                string s = mStringTable.GetSymbolAtOffs(sym.mStrTableOffs);
+                                dataFile.Add($".global {s}");
+                                dataFile.Add($"{s}:");
+                            }
+
+                            long offs = (long)BaseAdress + reloc.GetAddend();
+                            dataFile.Add($"\t.quad 0x{offs.ToString("X")}");
+                        }
+                        else
+                        {
+                            byte[] val = new byte[8];
+                            Array.Copy(mData, (int)i, val, 0, 8);
+                            long l = BitConverter.ToInt64(val);
+                            dataFile.Add($"\t.quad 0x{l.ToString("X")}");
+                        }
                     }
 
                     /* if we are only dumping info, we can stop here. */
@@ -209,6 +267,10 @@ namespace swspl.nso
                     {
                         return;
                     }
+
+                    Directory.CreateDirectory($"{mFileName}\\asm");
+                    File.WriteAllLines($"{mFileName}\\asm\\got.s", gotFile.ToArray());
+                    File.WriteAllLines($"{mFileName}\\asm\\data.s", dataFile.ToArray());
 
                     /* read the rest of our .text */
                     /* some MOD0s end with padding, some don't. there really isn't a way to tell. */
@@ -325,6 +387,11 @@ namespace swspl.nso
 
             // reorder them again
             mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
+
+            // now let's fill in the gaps
+            foreach (KeyValuePair<ulong, List<string>> kvp in mTextFile) {
+
+            }
         }
 
         private void ParseFunction(DynamicSymbol sym, string symbolName, byte[] funcBytes, long pos, long startOffset)
