@@ -225,6 +225,11 @@ namespace swspl.nso
             mSymbols = mSymbols.OrderBy(symbol => symbol.mValue).ToList();
         }
 
+        public DynamicSymbol? GetSymbolAtIdx(int idx)
+        {
+            return mSymbols[idx];
+        }
+
         public DynamicSymbol? GetSymbolAtAddr(ulong addr)
         {
             int index = mSymbols.BinarySearch(

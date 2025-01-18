@@ -231,10 +231,11 @@ namespace swspl.nso
                     // .dynamic is always after .data in my testing, so we can use that as a reference point to know our data size
                     // the data we are relocating is going to be 8-byte values so we go from there
                     List<string> dataFile = new();
+                    dataFile.Add(".section \".data\"\n");
 
-                    ulong numDataEntries = dynOffs / 8;
+                    ulong dataEntryStart = dynOffs;
                     ulong dataBaseOffs = mDataSegment.GetMemoryOffset();
-                    for (ulong i = 0; i < numDataEntries; i += 8)
+                    for (ulong i = 0; i < dataEntryStart; i += 8)
                     {
                         ulong addr = dataBaseOffs + i;
                         DynamicReloc? reloc = mRelocTable.GetRelocationAtOffset(addr);
@@ -250,8 +251,32 @@ namespace swspl.nso
                                 dataFile.Add($"{s}:");
                             }
 
-                            long offs = (long)BaseAdress + reloc.GetAddend();
-                            dataFile.Add($"\t.quad 0x{offs.ToString("X")}");
+                            /* relative usually points to a function or a set of data */
+                            if (reloc.GetRelocType() == RelocType.R_AARCH64_RELATIVE)
+                            {
+                                // offset to our function
+                                DynamicSymbol? refSym = mSymbolTable.GetSymbolAtAddr((ulong)reloc.GetAddend());
+
+                                if (refSym != null)
+                                {
+                                    string curSym = mStringTable.GetSymbolAtOffs(refSym.mStrTableOffs);
+                                    dataFile.Add($"\t.quad {curSym}");
+                                }
+                                else
+                                {
+                                    long offs = (long)BaseAdress + reloc.GetAddend();
+                                    dataFile.Add($"\t.quad 0x{offs.ToString("X")}");
+                                }
+                            }
+                            /* absolute or glob uses addends */
+                            else if (reloc.GetRelocType() == RelocType.R_AARCH64_ABS64 || reloc.GetRelocType() == RelocType.R_AARCH64_GLOB_DAT)
+                            {
+                                DynamicSymbol? refSym = mSymbolTable.GetSymbolAtIdx((int)reloc.GetSymIdx());
+                                string curSym = mStringTable.GetSymbolAtOffs(refSym.mStrTableOffs);
+                                dataFile.Add($"\t.quad {curSym}");
+                            }
+
+                            
                         }
                         else
                         {
