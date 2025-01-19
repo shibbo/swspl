@@ -2,6 +2,7 @@
 using K4os.Compression.LZ4;
 using Gee.External.Capstone;
 using Gee.External.Capstone.Arm64;
+using System.Linq;
 
 namespace swspl.nso
 {
@@ -15,6 +16,7 @@ namespace swspl.nso
         private DynamicSymbolTable mSymbolTable;
         private DynamicStringTable mStringTable;
         private Dictionary<string, Arm64Instruction[]> mFuncInstructions = new();
+        private List<long> mRelocUnkFuncs = new();
         //private Dictionary<ulong, long> mGlobalOffsTbl = new();
 
         byte[] mTextHash;
@@ -265,7 +267,22 @@ namespace swspl.nso
                                 else
                                 {
                                     long offs = (long)BaseAdress + reloc.GetAddend();
-                                    dataFile.Add($"\t.quad 0x{offs.ToString("X")}");
+
+                                    // means we found a relocated function only referenced by data with no symbol
+                                    // most commonly PTMFs and virtuals
+                                    if (mTextSegement.IsInRange((uint)offs))
+                                    {
+                                        if (!mRelocUnkFuncs.Contains(offs)) {
+                                            mRelocUnkFuncs.Add(offs);
+                                        }
+
+                                        dataFile.Add($"\t.quad fn_{offs.ToString("X")}");
+                                    }
+                                    else
+                                    {
+                                        dataFile.Add($"\t.quad 0x{offs.ToString("X")}");
+                                    }
+                                    
                                 }
                             }
                             /* absolute or glob uses addends */
@@ -275,8 +292,6 @@ namespace swspl.nso
                                 string curSym = mStringTable.GetSymbolAtOffs(refSym.mStrTableOffs);
                                 dataFile.Add($"\t.quad {curSym}");
                             }
-
-                            
                         }
                         else
                         {
@@ -375,6 +390,46 @@ namespace swspl.nso
             // let's first order our dictionary
             mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
 
+            // now that we have all of our functions that are referenced in .text, now we can go for the ones referenced by .data
+            foreach (long offs in mRelocUnkFuncs)
+            {
+                ulong? closestKeyAbove = Util.FindClosestKeyAbove(offs, mTextFile.Keys);
+
+                long? nextOffset = mRelocUnkFuncs
+                .Where(offset => offset > offs)
+                .OrderBy(offset => offset)
+                .FirstOrDefault();
+
+                // is our next unknown offset CLOSER to our function?
+                if ((ulong)nextOffset < closestKeyAbove)
+                {
+                    ulong funcSize = (ulong)nextOffset - (ulong)offs;
+                    long pos = offs - (long)BaseAdress - startPos;
+                    byte[] funcBytes = textBytes.Skip((int)pos).Take((int)funcSize).ToArray();
+                    ParseFunction(funcSize, (ulong)offs - BaseAdress, $"fn_{offs.ToString("X")}", funcBytes, pos, pos + startPos);
+                    mAddrToSym.Add((ulong)offs, $"fn_{offs:X}");
+                }
+                else
+                {
+                    if (closestKeyAbove != null)
+                    {
+                        DynamicSymbol? aboveSym = mSymbolTable.GetSymbolAtAddr((ulong)closestKeyAbove - BaseAdress);
+
+                        if (aboveSym != null)
+                        {
+                            ulong funcSize = aboveSym.mValue - ((ulong)offs - BaseAdress);
+                            long pos = offs - (long)BaseAdress - startPos;
+                            byte[] funcBytes = textBytes.Skip((int)pos).Take((int)funcSize).ToArray();
+                            ParseFunction(funcSize, (ulong)offs - BaseAdress, $"fn_{offs.ToString("X")}", funcBytes, pos, pos + startPos);
+                            mAddrToSym.Add((ulong)offs, $"fn_{offs:X}");
+                        }
+                    }
+                }
+
+            }
+
+            mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
+
             List<ulong> remainingUnknowns = mUnknownFuncs.ToList();
             HashSet<ulong> processedOffsets = new(); // Keep track of processed offsets
 
@@ -412,11 +467,6 @@ namespace swspl.nso
 
             // reorder them again
             mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
-
-            // now let's fill in the gaps
-            foreach (KeyValuePair<ulong, List<string>> kvp in mTextFile) {
-
-            }
         }
 
         private void ParseFunction(DynamicSymbol sym, string symbolName, byte[] funcBytes, long pos, long startOffset)
@@ -553,7 +603,7 @@ namespace swspl.nso
                     funcStr.Insert(funcIdx + jumps.IndexOf(jmp), $"loc_{(BaseAdress + jmp).ToString("X")}:");
                 }
             }
-
+                
             mTextFile.Add(BaseAdress + symAddr, funcStr);
         }
 

@@ -87,5 +87,20 @@ namespace swspl
                     return false;
             }
         }
+
+        public static ulong FindClosestKey(long target, IEnumerable<ulong> keys)
+        {
+            return keys.Aggregate((minKey, nextKey) =>
+                Math.Abs((long)nextKey - target) < Math.Abs((long)minKey - target) ? nextKey : minKey);
+        }
+
+        public static ulong? FindClosestKeyAbove(long target, IEnumerable<ulong> keys)
+        {
+            var filteredKeys = keys.Where(k => (long)k >= target);
+            return filteredKeys.Any()
+                ? filteredKeys.Aggregate((minKey, nextKey) =>
+                    Math.Abs((long)nextKey - target) < Math.Abs((long)minKey - target) ? nextKey : minKey)
+                : (ulong?)null;
+        }
     }
 }

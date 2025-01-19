@@ -282,6 +282,11 @@ namespace swspl.nso
             return mStringTable.Values.ElementAt(idx);
         }
 
+        public long GetOffsetFromString(String str)
+        {
+            return mStringTable.First(x => x.Value == str).Key;
+        }
+
         Dictionary<long, String> mStringTable = new();
     }
 }
