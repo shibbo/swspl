@@ -3,9 +3,16 @@ using K4os.Compression.LZ4;
 using Gee.External.Capstone;
 using Gee.External.Capstone.Arm64;
 using System.Linq;
+using System.Runtime.CompilerServices;
 
 namespace swspl.nso
 {
+    public struct DataRef
+    {
+        public Arm64RegisterId mRegister;
+        public int mIndex;
+    }
+
     public class NSO
     {
         string mFileName;
@@ -425,7 +432,6 @@ namespace swspl.nso
                         }
                     }
                 }
-
             }
 
             mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
@@ -478,6 +484,7 @@ namespace swspl.nso
         {
             List<ulong> jumps = new();
             List<string> funcStr = new();
+            Dictionary<long, List<DataRef>> dataRefIndicies = new();
 
             using (CapstoneArm64Disassembler dis = CapstoneDisassembler.CreateArm64Disassembler(Arm64DisassembleMode.LittleEndian | Arm64DisassembleMode.Arm))
             {
@@ -488,6 +495,8 @@ namespace swspl.nso
 
                 Arm64Instruction[] instrs = dis.Disassemble(funcBytes, startOffset);
                 mFuncInstructions.Add(symbolName, instrs);
+
+                Dictionary<Arm64RegisterId, long> dataRegVals = new();
 
                 for (int i = 0; i < instrs.Length; i++)
                 {
@@ -582,6 +591,109 @@ namespace swspl.nso
                             }
                         }
 
+                    }
+                    else if (instr.Mnemonic == "adrp")
+                    {
+                        long dataAddr = instr.Details.Operands[1].Immediate;
+                        Arm64RegisterId reg = instr.Details.Operands[0].Register.Id;
+
+                        if (!dataRegVals.ContainsKey(reg))
+                        {
+                            dataRegVals.Add(reg, (long)BaseAdress + dataAddr);
+                        }
+
+                        funcStr.Add($"\tadrp {instr.Details.Operands[0].Register.Name}, lbl_REPLACEME@PAGE");
+                        DataRef r = new();
+                        r.mRegister = reg;
+                        r.mIndex = funcStr.Count - 1;
+
+                        if (dataRefIndicies.ContainsKey((long)BaseAdress + dataAddr))
+                        {
+                            dataRefIndicies[(long)BaseAdress + dataAddr].Add(r);
+                        }
+                        else
+                        {
+                            dataRefIndicies[(long)BaseAdress + dataAddr] = new();
+                            dataRefIndicies[(long)BaseAdress + dataAddr].Add(r);
+                        }
+                    }
+                    else if (instr.Mnemonic == "add")
+                    {
+                        Arm64RegisterId srcReg = instr.Details.Operands[1].Register.Id;
+
+                        if (dataRegVals.ContainsKey(srcReg))
+                        {
+                            string srcReg_Str = instr.Details.Operands[1].Register.Name;
+                            string destReg_Str = instr.Details.Operands[0].Register.Name;
+                            long finalAddr = dataRegVals[srcReg] + instr.Details.Operands[2].Immediate;
+                            List<DataRef> r = dataRefIndicies[dataRegVals[srcReg]];
+                            int idx = -1;
+                            int refIdx = 0;
+
+                            foreach (DataRef _ in r)
+                            {
+                                if (_.mRegister == srcReg)
+                                {
+                                    idx = _.mIndex;
+                                    break;
+                                }
+
+                                refIdx++;
+                            }
+
+                            dataRefIndicies[dataRegVals[srcReg]].RemoveAt(refIdx);
+
+                            string f = funcStr.ElementAt(idx);
+                            f = f.Replace("REPLACEME", $"{finalAddr:X}");
+                            funcStr[idx] = f;
+                            dataRegVals.Remove(srcReg);
+                            funcStr.Add($"\tadd {destReg_Str}, {srcReg_Str}, lbl_{finalAddr:X}@PAGEOFF");
+                        }
+                        else
+                        {
+                            // we don't do anything to the add if it's just a normal add
+                            funcStr.Add($"\t{instr}");
+                        }
+                    }
+                    else if (instr.Mnemonic == "ldr")
+                    {
+                        Arm64RegisterId srcReg = instr.Details.Operands[1].Memory.Base.Id;
+
+                        if (dataRegVals.ContainsKey(srcReg))
+                        {
+                            string dstReg_Str = instr.Details.Operands[0].Register.Name;
+                            string srcReg_Str = instr.Details.Operands[1].Memory.Base.Name;
+                            long destAddr = instr.Details.Operands[1].Memory.Displacement;
+                            funcStr.Add($"\tldr {dstReg_Str}, [{srcReg_Str}, lbl_{(dataRegVals[srcReg]+destAddr):X}@PAGEOFF]");
+
+                            // now let's adjust our other loader (adrp)
+                            List<DataRef> r = dataRefIndicies[dataRegVals[srcReg]];
+                            int idx = -1;
+                            int refIdx = 0;
+
+                            foreach (DataRef _ in r)
+                            {
+                                if (_.mRegister == srcReg)
+                                {
+                                    idx = _.mIndex;
+                                    break;
+                                }
+
+                                refIdx++;
+                            }
+
+                            dataRefIndicies[dataRegVals[srcReg]].RemoveAt(refIdx);
+
+                            string f = funcStr.ElementAt(idx);
+                            f = f.Replace("REPLACEME", $"{(dataRegVals[srcReg] + destAddr):X}");
+                            funcStr[idx] = f;
+                            dataRegVals.Remove(srcReg);
+                        }
+                        else
+                        {
+                            // we don't do anything to the ldr if it's just a normal load
+                            funcStr.Add($"\t{instr}");
+                        }
                     }
                     else
                     {
