@@ -13,6 +13,12 @@ namespace swspl.nso
         public int mIndex;
     }
 
+    public enum DataRefType 
+    { 
+        QWORD,
+        SINGLE
+    }
+
     public class NSO
     {
         string mFileName;
@@ -24,7 +30,7 @@ namespace swspl.nso
         private DynamicStringTable mStringTable;
         private Dictionary<string, Arm64Instruction[]> mFuncInstructions = new();
         private List<long> mRelocUnkFuncs = new();
-        //private Dictionary<ulong, long> mGlobalOffsTbl = new();
+        Dictionary<long, DataRefType> mRefTypes = new();
 
         byte[] mTextHash;
         byte[] mDataHash;
@@ -152,14 +158,10 @@ namespace swspl.nso
                     }
 
                     // our data is valid. we can move on to our dynamic stuff
-                    BinaryReader dynReader = new(new MemoryStream(mRodata), Encoding.UTF8);
+                    BinaryReader dynReader = new(new MemoryStream(mRodata), Encoding.GetEncoding("shift-jis"));
 
                     /* .buildstr */
                     mBuildStr = new(dynReader);
-
-                    /* .dynstr */
-                    dynReader.BaseStream.Seek(dynStrOffs, SeekOrigin.Begin);
-                    mStringTable = new(dynReader, dynStrSize);
 
                     /* .dynsym */
                     uint numSyms = dynSymSize / 24;
@@ -195,6 +197,13 @@ namespace swspl.nso
                     long pltCount = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_PLTRELSZ) / 0x14;
                     RelocationPLT plt = new(dynReader, pltCount);
 
+                    /* .dynstr */
+                    /* we purposefully read .dynstr last since it is always right before .rodata */
+                    dynReader.BaseStream.Seek(dynStrOffs, SeekOrigin.Begin);
+                    mStringTable = new(dynReader, dynStrSize);
+                    /* align to nearest 0x10th */
+                    dynReader.BaseStream.Position = (dynReader.BaseStream.Position + (0x10 - 1)) & ~(0x10 - 1);
+
                     /* .got.plt */
                     long gotPltOffs = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_PLTGOT) - mDataSegment.GetMemoryOffset();
                     GlobalPLT globalPLT = new(dataReader, plt.GetNumJumps());
@@ -215,6 +224,7 @@ namespace swspl.nso
                     for (ulong i = 0; i < gotCount; i++)
                     {
                         ulong addr = baseAddr + (i * 8);
+                        gotFile.Add($".global off_{(BaseAdress + addr).ToString("X")}");
                         gotFile.Add($"off_{(BaseAdress + addr).ToString("X")}:");
                         DynamicReloc? reloc = mRelocTable.GetRelocationAtOffset(addr);
 
@@ -224,7 +234,12 @@ namespace swspl.nso
                             {
                                 case RelocType.R_AARCH64_RELATIVE:
                                     string addend = ((long)BaseAdress + reloc.GetAddend()).ToString("X");
-                                    gotFile.Add($"\t.quad 0x{addend}");
+                                    gotFile.Add($"\t.quad off_{addend}");
+
+                                    if (!mRefTypes.ContainsKey((long)BaseAdress + reloc.GetAddend()))
+                                    {
+                                        mRefTypes.Add((long)BaseAdress + reloc.GetAddend(), DataRefType.QWORD);
+                                    }
                                     break;
                                 case RelocType.R_AARCH64_GLOB_DAT:
                                 case RelocType.R_AARCH64_ABS64:
@@ -235,6 +250,25 @@ namespace swspl.nso
                         }
                     }
 
+                    /* read the rest of our .text */
+                    /* some MOD0s end with padding, some don't. there really isn't a way to tell. */
+                    while (true)
+                    {
+                        // ...so let's read until we hit nonzero
+                        if (textReader.ReadUInt32() != 0)
+                        {
+                            textReader.BaseStream.Position -= 4;
+                            break;
+                        }
+                    }
+
+                    // our functions are relative to the end of MOD0
+                    long startPos = textReader.BaseStream.Position;
+
+                    // now we read the remaining portion of .text and map those instructions to symbols
+                    int remainingText = mTextSegement.GetSize() - (int)textReader.BaseStream.Position;
+                    byte[] textBytes = textReader.ReadBytes(remainingText);
+                    ParseTextSegment(textBytes, startPos);
 
 
                     // .dynamic is always after .data in my testing, so we can use that as a reference point to know our data size
@@ -248,6 +282,12 @@ namespace swspl.nso
                     {
                         ulong addr = dataBaseOffs + i;
                         DynamicReloc? reloc = mRelocTable.GetRelocationAtOffset(addr);
+
+                        if (mRefTypes.ContainsKey((long)BaseAdress + (long)addr))
+                        {
+                            dataFile.Add($".global off_{((long)BaseAdress + (long)addr):X}");
+                            dataFile.Add($"off_{((long)BaseAdress + (long)addr):X}:");
+                        }
 
                         if (reloc != null)
                         {
@@ -287,7 +327,13 @@ namespace swspl.nso
                                     }
                                     else
                                     {
-                                        dataFile.Add($"\t.quad 0x{offs.ToString("X")}");
+                                        if (!mRefTypes.ContainsKey(offs))
+                                        {
+                                            DataRefType t = DataRefType.QWORD;
+                                            mRefTypes.Add(offs, t);
+                                        }
+
+                                        dataFile.Add($"\t.quad off_{offs.ToString("X")}");
                                     }
                                     
                                 }
@@ -305,7 +351,81 @@ namespace swspl.nso
                             byte[] val = new byte[8];
                             Array.Copy(mData, (int)i, val, 0, 8);
                             long l = BitConverter.ToInt64(val);
-                            dataFile.Add($"\t.quad 0x{l.ToString("X")}");
+                            dataFile.Add($"\t.quad off_{l.ToString("X")}");
+                        }
+                    }
+
+                    mRefTypes = mRefTypes.OrderBy(e => e.Key).ToDictionary();
+
+                    /* .rodata */
+                    long size = embedOffs - dynReader.BaseStream.Position;
+                    List<string> rodataFile = new();
+                    rodataFile.Add(".section \".rodata\"\n");
+
+                    ulong rodataBaseOffs = mRodataSegment.GetMemoryOffset() + (ulong)dynReader.BaseStream.Position;
+
+                    for (ulong i = 0; i < (ulong)size; ) 
+                    {
+                        ulong addr = rodataBaseOffs + i;
+                        ulong a = BaseAdress + addr;
+
+                        if (mRefTypes.ContainsKey((long)a))
+                        {
+                            long? nextKey = mRefTypes.Keys.FirstOrDefault(key => key > (long)a);
+                            long dist = (long)nextKey - (long)a;
+                            DataRefType t = mRefTypes[(long)a];
+
+                            if (t == DataRefType.QWORD)
+                            {
+                                byte[] b = dynReader.ReadBytes((int)dist);
+                                string s = Encoding.UTF8.GetString(b);
+
+                                bool isInvalid = !string.IsNullOrEmpty(s) && s.IndexOf('\0') == -1;
+
+                                if (!isInvalid)
+                                {
+                                    // let's redo the op
+                                    byte[] bb = new byte[b.Length - 1];
+                                    Array.Copy(b, bb, bb.Length);
+                                    s = Encoding.UTF8.GetString(bb);
+
+                                    rodataFile.Add($".global off_{a:X}");
+                                    rodataFile.Add($".off_{a:X}:");
+                                    s = s.Replace("\t", "\\t")
+                                        .Replace("\"", "\\\"")
+                                        .Replace("\r", "\\r")
+                                        .Replace("\n", "\\n");
+                                    rodataFile.Add($"\t.string \"{s}\"");
+                                    rodataFile.Add("\t.byte 0");
+                                }
+                                else
+                                {
+                                    rodataFile.Add($".global off_{a:X}");
+                                    rodataFile.Add($".off_{a:X}:");
+                                    for (long j = 0; j < dist; j++)
+                                    {
+                                        rodataFile.Add($"\t.byte 0x{b[j]:X}");
+                                    }
+                                }
+
+                                i += (ulong)dist;
+                            }
+                            else if (t == DataRefType.SINGLE)
+                            {
+                                byte[] val = new byte[4];
+                                Array.Copy(mRodata, (int)i, val, 0, 4);
+                                float l = BitConverter.ToSingle(val);
+                                rodataFile.Add($".global off_{a:X}");
+                                rodataFile.Add($".off_{a:X}:");
+                                rodataFile.Add($"\t.float {l}");
+                                i += 4;
+                            }
+                        }
+                        else
+                        {
+                            byte b = dynReader.ReadByte();
+                            rodataFile.Add($"\t.byte 0x{b:X}");
+                            i++;
                         }
                     }
 
@@ -318,26 +438,7 @@ namespace swspl.nso
                     Directory.CreateDirectory($"{mFileName}\\asm");
                     File.WriteAllLines($"{mFileName}\\asm\\got.s", gotFile.ToArray());
                     File.WriteAllLines($"{mFileName}\\asm\\data.s", dataFile.ToArray());
-
-                    /* read the rest of our .text */
-                    /* some MOD0s end with padding, some don't. there really isn't a way to tell. */
-                    while (true)
-                    {
-                        // ...so let's read until we hit nonzero
-                        if (textReader.ReadUInt32() != 0)
-                        {
-                            textReader.BaseStream.Position -= 4;
-                            break;
-                        }
-                    }
-
-                    // our functions are relative to the end of MOD0
-                    long startPos = textReader.BaseStream.Position;
-
-                    // now we read the remaining portion of .text and map those instructions to symbols
-                    int remainingText = mTextSegement.GetSize() - (int)textReader.BaseStream.Position;
-                    byte[] textBytes = textReader.ReadBytes(remainingText);
-                    ParseTextSegment(textBytes, startPos);
+                    File.WriteAllLines($"{mFileName}\\asm\\rodata.s", rodataFile.ToArray());
                 }
             }
             else
@@ -363,6 +464,7 @@ namespace swspl.nso
 
         public void ParseTextSegment(byte[] textBytes, long startPos)
         {
+
             foreach (DynamicSymbol sym in mSymbolTable.mSymbols)
             {
                 string symbolName = mStringTable.GetSymbolAtOffs(sym.mStrTableOffs);
@@ -557,6 +659,7 @@ namespace swspl.nso
                         }
                         else if (instr.Mnemonic == "cbz")
                         {
+                            string reg = instr.Details.Operands[0].Register.Name;
                             ulong addr = (ulong)instr.Details.Operands[1].Immediate;
 
                             if (!jumps.Contains(addr))
@@ -564,13 +667,37 @@ namespace swspl.nso
                                 jumps.Add(addr);
                             }
 
-                            funcStr.Add($"\t{instr.Mnemonic} loc_{(BaseAdress + addr).ToString("X")}");
+                            funcStr.Add($"\t{instr.Mnemonic} {reg}, loc_{(BaseAdress + addr).ToString("X")}");
+                        }
+                        else if (instr.Mnemonic == "cbnz")
+                        {
+                            string reg = instr.Details.Operands[0].Register.Name;
+                            ulong addr = (ulong)instr.Details.Operands[1].Immediate;
+
+                            if (!jumps.Contains(addr))
+                            {
+                                jumps.Add(addr);
+                            }
+
+                            funcStr.Add($"\t{instr.Mnemonic} {reg}, loc_{(BaseAdress + addr).ToString("X")}");
+                        }
+                        else if (Util.IsLocalBranchInstr(instr.Mnemonic)) 
+                        {
+                            ulong jmp = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
+
+                            if (!jumps.Contains(jmp))
+                            {
+                                jumps.Add(jmp);
+                            }
+
+                            funcStr.Add($"\t{instr.Mnemonic} loc_{(BaseAdress + jmp).ToString("X")}");
                         }
                         else
                         {
                             // sometimes the compiler can branch to another function without using BL
                             // make sure we account for it
                             ulong jmp = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
+
                             ulong range = (ulong)pos + size;
                             // is our jump in range of our current function?
                             // if it is, it is a local branch
@@ -602,7 +729,7 @@ namespace swspl.nso
                             dataRegVals.Add(reg, (long)BaseAdress + dataAddr);
                         }
 
-                        funcStr.Add($"\tadrp {instr.Details.Operands[0].Register.Name}, lbl_REPLACEME@PAGE");
+                        funcStr.Add($"\tadrp {instr.Details.Operands[0].Register.Name}, off_REPLACEME@PAGE");
                         DataRef r = new();
                         r.mRegister = reg;
                         r.mIndex = funcStr.Count - 1;
@@ -641,13 +768,25 @@ namespace swspl.nso
                                 refIdx++;
                             }
 
+                            uint a = (uint)finalAddr;
+                            if (!mRefTypes.ContainsKey(finalAddr))
+                            {
+                                DataRefType t = DataRefType.QWORD;
+                                if (destReg_Str.StartsWith("s"))
+                                {
+                                    t = DataRefType.SINGLE;
+                                }
+
+                                mRefTypes.Add(finalAddr, t);
+                            }
+
                             dataRefIndicies[dataRegVals[srcReg]].RemoveAt(refIdx);
 
                             string f = funcStr.ElementAt(idx);
                             f = f.Replace("REPLACEME", $"{finalAddr:X}");
                             funcStr[idx] = f;
                             dataRegVals.Remove(srcReg);
-                            funcStr.Add($"\tadd {destReg_Str}, {srcReg_Str}, lbl_{finalAddr:X}@PAGEOFF");
+                            funcStr.Add($"\tadd {destReg_Str}, {srcReg_Str}, off_{finalAddr:X}@PAGEOFF");
                         }
                         else
                         {
@@ -664,7 +803,7 @@ namespace swspl.nso
                             string dstReg_Str = instr.Details.Operands[0].Register.Name;
                             string srcReg_Str = instr.Details.Operands[1].Memory.Base.Name;
                             long destAddr = instr.Details.Operands[1].Memory.Displacement;
-                            funcStr.Add($"\tldr {dstReg_Str}, [{srcReg_Str}, lbl_{(dataRegVals[srcReg]+destAddr):X}@PAGEOFF]");
+                            funcStr.Add($"\tldr {dstReg_Str}, [{srcReg_Str}, off_{(dataRegVals[srcReg]+destAddr):X}@PAGEOFF]");
 
                             // now let's adjust our other loader (adrp)
                             List<DataRef> r = dataRefIndicies[dataRegVals[srcReg]];
@@ -682,12 +821,26 @@ namespace swspl.nso
                                 refIdx++;
                             }
 
+                            uint a = (uint)dataRegVals[srcReg] + (uint)destAddr;
+                            if (!mRefTypes.ContainsKey(dataRegVals[srcReg] + destAddr))
+                            {
+                                DataRefType t = DataRefType.QWORD;
+                                if (dstReg_Str.StartsWith("s"))
+                                {
+                                    t = DataRefType.SINGLE;
+                                }
+
+                                mRefTypes.Add(dataRegVals[srcReg] + destAddr, t);
+                            }
+
+
                             dataRefIndicies[dataRegVals[srcReg]].RemoveAt(refIdx);
 
                             string f = funcStr.ElementAt(idx);
                             f = f.Replace("REPLACEME", $"{(dataRegVals[srcReg] + destAddr):X}");
                             funcStr[idx] = f;
                             dataRegVals.Remove(srcReg);
+
                         }
                         else
                         {

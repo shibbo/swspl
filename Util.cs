@@ -73,6 +73,7 @@ namespace swspl
             {
                 case "b":
                 case "b.ne":
+                case "b.cc":
                 case "b.ge":
                 case "b.lt":
                 case "b.gt":
@@ -82,6 +83,29 @@ namespace swspl
                 case "tbz":
                 case "tbnz":
                 case "cbz":
+                case "cbnz":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        public static bool IsLocalBranchInstr(string instr)
+        {
+            switch (instr)
+            {
+                case "b.ne":
+                case "b.cc":
+                case "b.ge":
+                case "b.lt":
+                case "b.le":
+                case "b.ls":
+                case "b.gt":
+                case "b.lo":
+                case "b.hs":
+                case "b.hi":
+                case "b.eq":
+                case "b.pl":
                     return true;
                 default:
                     return false;
