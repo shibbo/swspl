@@ -126,5 +126,45 @@ namespace swspl
                     Math.Abs((long)nextKey - target) < Math.Abs((long)minKey - target) ? nextKey : minKey)
                 : (ulong?)null;
         }
+
+        public static bool IsValidUtf8(byte[] bytes)
+        {
+            int i = 0;
+            while (i < bytes.Length)
+            {
+                byte b = bytes[i];
+
+                if (b <= 0x7F)
+                {
+                    i++;
+                }
+                else if ((b >= 0xC0 && b <= 0xDF) && (i + 1 < bytes.Length && (bytes[i + 1] & 0xC0) == 0x80))
+                {
+                    i += 2;
+                }
+                else if ((b >= 0xE0 && b <= 0xEF) && (i + 2 < bytes.Length && (bytes[i + 1] & 0xC0) == 0x80 && (bytes[i + 2] & 0xC0) == 0x80))
+                {
+                    i += 3;
+                }
+                else if ((b >= 0xF0 && b <= 0xF7) && (i + 3 < bytes.Length && (bytes[i + 1] & 0xC0) == 0x80 && (bytes[i + 2] & 0xC0) == 0x80 && (bytes[i + 3] & 0xC0) == 0x80))
+                {
+                    i += 4;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        public static byte[] TrimNullTerminator(byte[] bytes)
+        {
+            if (bytes.Length > 0 && bytes[^1] == 0x00)
+            {
+                Array.Resize(ref bytes, bytes.Length - 1);
+            }
+            return bytes;
+        }
     }
 }

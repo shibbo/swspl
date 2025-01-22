@@ -16,6 +16,7 @@ namespace swspl.nso
     public enum DataRefType 
     { 
         QWORD,
+        XWORD,
         SINGLE
     }
 
@@ -360,6 +361,8 @@ namespace swspl.nso
                     /* .rodata */
                     long size = embedOffs - dynReader.BaseStream.Position;
                     List<string> rodataFile = new();
+                    bool hasAlignedForFloat = false;
+                    bool hasAlignedForData = false;
                     rodataFile.Add(".section \".rodata\"\n");
 
                     ulong rodataBaseOffs = mRodataSegment.GetMemoryOffset() + (ulong)dynReader.BaseStream.Position;
@@ -380,14 +383,10 @@ namespace swspl.nso
                                 byte[] b = dynReader.ReadBytes((int)dist);
                                 string s = Encoding.UTF8.GetString(b);
 
-                                bool isInvalid = !string.IsNullOrEmpty(s) && s.IndexOf('\0') == -1;
-
-                                if (!isInvalid)
+                                if (Util.IsValidUtf8(b))
                                 {
-                                    // let's redo the op
-                                    byte[] bb = new byte[b.Length - 1];
-                                    Array.Copy(b, bb, bb.Length);
-                                    s = Encoding.UTF8.GetString(bb);
+                                    b = Util.TrimNullTerminator(b);
+                                    s = Encoding.UTF8.GetString(b);
 
                                     rodataFile.Add($".global off_{a:X}");
                                     rodataFile.Add($".off_{a:X}:");
@@ -412,13 +411,38 @@ namespace swspl.nso
                             }
                             else if (t == DataRefType.SINGLE)
                             {
-                                byte[] val = new byte[4];
-                                Array.Copy(mRodata, (int)i, val, 0, 4);
+                                /* the first float entry gets aligned since this ends the string data */
+                                if (!hasAlignedForFloat)
+                                {
+                                    rodataFile.Add($"\t.align 0x10");
+                                    /* align to nearest 0x10th */
+                                    i = (i + (0x10Ul - 10Ul)) & ~(0x10Ul - 10Ul);
+                                    hasAlignedForFloat = true;
+                                }
+                                byte[] val = dynReader.ReadBytes(4);
                                 float l = BitConverter.ToSingle(val);
                                 rodataFile.Add($".global off_{a:X}");
                                 rodataFile.Add($".off_{a:X}:");
                                 rodataFile.Add($"\t.float {l}");
                                 i += 4;
+                            }
+                            else if (t == DataRefType.XWORD)
+                            {
+                                if (!hasAlignedForData)
+                                {
+                                    rodataFile.Add($"\t.align 0x10");
+                                    /* align to nearest 0x10th */
+                                    i = (i + (0x10Ul - 10Ul)) & ~(0x10Ul - 10Ul);
+                                    hasAlignedForData = true;
+                                }
+
+                                for (long j = 0; j < 16; j++)
+                                {
+                                    byte b = dynReader.ReadByte();
+                                    rodataFile.Add($"\t.byte 0x{b:X}");
+                                }
+
+                                i += 16;
                             }
                         }
                         else
@@ -776,6 +800,10 @@ namespace swspl.nso
                                 {
                                     t = DataRefType.SINGLE;
                                 }
+                                else if (destReg_Str.StartsWith("q"))
+                                {
+                                    t = DataRefType.XWORD;
+                                }
 
                                 mRefTypes.Add(finalAddr, t);
                             }
@@ -828,6 +856,10 @@ namespace swspl.nso
                                 if (dstReg_Str.StartsWith("s"))
                                 {
                                     t = DataRefType.SINGLE;
+                                }
+                                else if (dstReg_Str.StartsWith("q"))
+                                {
+                                    t = DataRefType.XWORD;
                                 }
 
                                 mRefTypes.Add(dataRegVals[srcReg] + destAddr, t);
