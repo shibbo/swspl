@@ -4,6 +4,7 @@ using Gee.External.Capstone;
 using Gee.External.Capstone.Arm64;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Linq.Expressions;
 
 namespace swspl.nso
 {
@@ -68,6 +69,8 @@ namespace swspl.nso
                     // skip the version and reversed sections
                     reader.ReadBytes(8);
 
+                    Console.WriteLine("Reading header...");
+
                     mFlags = reader.ReadUInt32();
                     mTextSegement = new NSOSegment(reader);
                     uint moduleNameOffs = reader.ReadUInt32();
@@ -93,6 +96,8 @@ namespace swspl.nso
                     mTextHash = reader.ReadBytes(0x20);
                     mRoDataHash = reader.ReadBytes(0x20);
                     mDataHash = reader.ReadBytes(0x20);
+
+                    Console.WriteLine("Extracting segments...");
 
                     // now we get the final data for each section
                     // .text
@@ -161,17 +166,25 @@ namespace swspl.nso
                     // our data is valid. we can move on to our dynamic stuff
                     BinaryReader dynReader = new(new MemoryStream(mRodata), Encoding.GetEncoding("shift-jis"));
 
+                    Console.WriteLine("Parsing .buildstr...");
+
                     /* .buildstr */
                     mBuildStr = new(dynReader);
+
+                    Console.WriteLine("Parsing .dymsym...");
 
                     /* .dynsym */
                     uint numSyms = dynSymSize / 24;
                     dynReader.BaseStream.Seek(dynSymOffs, SeekOrigin.Begin);
                     mSymbolTable = new(dynReader, numSyms);
 
+                    Console.WriteLine("Parsing MOD0...");
+
                     // MOD0
                     BinaryReader textReader = new(new MemoryStream(mText), Encoding.UTF8);
                     mModule = new(textReader);
+
+                    Console.WriteLine("Parsing .dynamic...");
 
                     /* .dynamic */
                     uint dynOffs = mModule.mDynOffset - mDataSegment.GetMemoryOffset();
@@ -179,12 +192,19 @@ namespace swspl.nso
                     dataReader.BaseStream.Position = dynOffs;
                     mDynamicSegment = new(dataReader);
 
+                    Console.WriteLine("Parsing .hash...");
+
                     /* .hash */
                     long hashOffs = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_HASH) - mRodataSegment.GetMemoryOffset();
                     dynReader.BaseStream.Seek(hashOffs, SeekOrigin.Begin);
                     mHashTable = new(dynReader);
+
+                    Console.WriteLine("Parsing .gnu_hash...");
+
                     /* .gnu_hash */
                     mGNUHashTable = new(dynReader);
+
+                    Console.WriteLine("Parsing .rela.dyn...");
 
                     /* .rela.dyn */
                     long relocCount = mDynamicSegment.GetRelocationCount();
@@ -192,11 +212,15 @@ namespace swspl.nso
                     dynReader.BaseStream.Seek(relocOffs, SeekOrigin.Begin);
                     mRelocTable = new(dynReader, relocCount);
 
+                    Console.WriteLine("Parsing .rela.plt...");
+
                     /* .rela.plt */
                     long pltOffs = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_JMPREL) - mRodataSegment.GetMemoryOffset();
                     dynReader.BaseStream.Seek(pltOffs, SeekOrigin.Begin);
                     long pltCount = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_PLTRELSZ) / 0x14;
                     RelocationPLT plt = new(dynReader, pltCount);
+
+                    Console.WriteLine("Parsing .dynstr...");
 
                     /* .dynstr */
                     /* we purposefully read .dynstr last since it is always right before .rodata */
@@ -205,9 +229,13 @@ namespace swspl.nso
                     /* align to nearest 0x10th */
                     dynReader.BaseStream.Position = (dynReader.BaseStream.Position + (0x10 - 1)) & ~(0x10 - 1);
 
+                    Console.WriteLine("Parsing .got.plt...");
+
                     /* .got.plt */
                     long gotPltOffs = mDynamicSegment.GetTagValue<long>(DynamicSegment.TagType.DT_PLTGOT) - mDataSegment.GetMemoryOffset();
                     GlobalPLT globalPLT = new(dataReader, plt.GetNumJumps());
+
+                    Console.WriteLine("Parsing .got...");
 
                     /* .got */
                     long gotStart = dataReader.BaseStream.Position;
@@ -218,6 +246,8 @@ namespace swspl.nso
                     ulong gotCount = (ulong)(gotEnd - gotStart) / 8;
                     // jump to our memory offset in .got itself to make identifying relocations easier
                     ulong baseAddr = (ulong)(gotStart + mDataSegment.GetMemoryOffset());
+
+                    Console.WriteLine("Exporting .got...");
 
                     List<string> gotFile = new();
                     gotFile.Add(".section \".got\"\n");
@@ -251,26 +281,7 @@ namespace swspl.nso
                         }
                     }
 
-                    /* read the rest of our .text */
-                    /* some MOD0s end with padding, some don't. there really isn't a way to tell. */
-                    while (true)
-                    {
-                        // ...so let's read until we hit nonzero
-                        if (textReader.ReadUInt32() != 0)
-                        {
-                            textReader.BaseStream.Position -= 4;
-                            break;
-                        }
-                    }
-
-                    // our functions are relative to the end of MOD0
-                    long startPos = textReader.BaseStream.Position;
-
-                    // now we read the remaining portion of .text and map those instructions to symbols
-                    int remainingText = mTextSegement.GetSize() - (int)textReader.BaseStream.Position;
-                    byte[] textBytes = textReader.ReadBytes(remainingText);
-                    ParseTextSegment(textBytes, startPos);
-
+                    Console.WriteLine("Exporting .data...");
 
                     // .dynamic is always after .data in my testing, so we can use that as a reference point to know our data size
                     // the data we are relocating is going to be 8-byte values so we go from there
@@ -320,7 +331,8 @@ namespace swspl.nso
                                     // most commonly PTMFs and virtuals
                                     if (mTextSegement.IsInRange((uint)offs))
                                     {
-                                        if (!mRelocUnkFuncs.Contains(offs)) {
+                                        if (!mRelocUnkFuncs.Contains(offs)) 
+                                        {
                                             mRelocUnkFuncs.Add(offs);
                                         }
 
@@ -356,7 +368,34 @@ namespace swspl.nso
                         }
                     }
 
+                    /* read the rest of our .text */
+                    /* some MOD0s end with padding, some don't. there really isn't a way to tell. */
+                    while (true)
+                    {
+                        // ...so let's read until we hit nonzero
+                        if (textReader.ReadUInt32() != 0)
+                        {
+                            textReader.BaseStream.Position -= 4;
+                            break;
+                        }
+                    }
+
+                    // our functions are relative to the end of MOD0
+                    long startPos = textReader.BaseStream.Position;
+
+                    Console.WriteLine("Preprocessing .text...");
+                    AssignAllLinkedBranches(mText, 0);
+
+                    Console.WriteLine("Exporting .text...");
+
+                    // now we read the remaining portion of .text and map those instructions to symbols
+                    int remainingText = mTextSegement.GetSize() - (int)textReader.BaseStream.Position;
+                    byte[] textBytes = textReader.ReadBytes(remainingText);
+                    ParseTextSegment(textBytes, startPos);
+
                     mRefTypes = mRefTypes.OrderBy(e => e.Key).ToDictionary();
+
+                    Console.WriteLine("Exporting .rodata...");
 
                     /* .rodata */
                     long size = embedOffs - dynReader.BaseStream.Position;
@@ -459,10 +498,14 @@ namespace swspl.nso
                         return;
                     }
 
+                    Console.WriteLine("Writing to files...");
+
                     Directory.CreateDirectory($"{mFileName}\\asm");
                     File.WriteAllLines($"{mFileName}\\asm\\got.s", gotFile.ToArray());
                     File.WriteAllLines($"{mFileName}\\asm\\data.s", dataFile.ToArray());
                     File.WriteAllLines($"{mFileName}\\asm\\rodata.s", rodataFile.ToArray());
+
+                    Console.WriteLine("Done.");
                 }
             }
             else
@@ -512,7 +555,7 @@ namespace swspl.nso
                     continue;
                 }
 
-                mAddrToSym.Add(sym.mValue + BaseAdress, symbolName);
+                AssignAddrToSym(sym.mValue + BaseAdress, symbolName);
                 long pos = (long)sym.mValue - startPos;
                 byte[] funcBytes = textBytes.Skip((int)pos).Take((int)sym.mSize).ToArray();
                 ParseFunction(sym, symbolName, funcBytes, pos, pos + startPos);
@@ -522,11 +565,17 @@ namespace swspl.nso
             // let's do the ones that do not have symbols, as they are a bit harder to parse
             // let's first order our dictionary
             mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
+            mRelocUnkFuncs.Sort();
 
             // now that we have all of our functions that are referenced in .text, now we can go for the ones referenced by .data
             foreach (long offs in mRelocUnkFuncs)
             {
-                ulong? closestKeyAbove = Util.FindClosestKeyAbove(offs, mTextFile.Keys);
+                if (mUnknownFuncs.Contains((ulong)offs))
+                {
+                    mUnknownFuncs.Remove((ulong)offs);
+                }
+
+                ulong? closestKeyAbove = Util.FindClosestKeyAbove(offs, mAddrToSym.Keys);
 
                 long? nextOffset = mRelocUnkFuncs
                 .Where(offset => offset > offs)
@@ -540,7 +589,7 @@ namespace swspl.nso
                     long pos = offs - (long)BaseAdress - startPos;
                     byte[] funcBytes = textBytes.Skip((int)pos).Take((int)funcSize).ToArray();
                     ParseFunction(funcSize, (ulong)offs - BaseAdress, $"fn_{offs.ToString("X")}", funcBytes, pos, pos + startPos);
-                    mAddrToSym.Add((ulong)offs, $"fn_{offs:X}");
+                    AssignAddrToSym((ulong)offs, $"fn_{offs:X}");
                 }
                 else
                 {
@@ -554,13 +603,13 @@ namespace swspl.nso
                             long pos = offs - (long)BaseAdress - startPos;
                             byte[] funcBytes = textBytes.Skip((int)pos).Take((int)funcSize).ToArray();
                             ParseFunction(funcSize, (ulong)offs - BaseAdress, $"fn_{offs.ToString("X")}", funcBytes, pos, pos + startPos);
-                            mAddrToSym.Add((ulong)offs, $"fn_{offs:X}");
+                            AssignAddrToSym((ulong)offs, $"fn_{offs:X}");
                         }
                     }
                 }
             }
 
-            mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
+            mAddrToSym = mAddrToSym.OrderBy(e => e.Key).ToDictionary();
 
             List<ulong> remainingUnknowns = mUnknownFuncs.ToList();
             HashSet<ulong> processedOffsets = new(); // Keep track of processed offsets
@@ -577,7 +626,7 @@ namespace swspl.nso
 
                 processedOffsets.Add(offs);
 
-                var nearest = mTextFile.FirstOrDefault(k => k.Key >= offs);
+                var nearest = mAddrToSym.FirstOrDefault(k => k.Key > offs);
 
                 if (nearest.Value != null)
                 {
@@ -587,7 +636,7 @@ namespace swspl.nso
                     if (!mFuncInstructions.ContainsKey($"fn_{offs:X}"))
                     {
                         ParseFunction(funcSize, (offs - (ulong)BaseAdress), $"fn_{offs:X}", funcBytes, pos, pos + startPos);
-                        mAddrToSym.Add(offs, $"fn_{offs:X}");
+                        AssignAddrToSym(offs, $"fn_{offs:X}");
                     }
                 }
 
@@ -661,6 +710,7 @@ namespace swspl.nso
                             if (!mUnknownFuncs.Contains(addr))
                             {
                                 mUnknownFuncs.Add(addr);
+                                AssignAddrToSym(addr, $"fn_{addr:X}");
                             }
                             jumpSymName = $"bl fn_{(BaseAdress + oper).ToString("X")}";
                         }
@@ -679,7 +729,7 @@ namespace swspl.nso
                                 jumps.Add(addr);
                             }
 
-                            funcStr.Add($"\t{instr.Mnemonic} #{instr.Details.Operands[1].Immediate} loc_{(BaseAdress + addr).ToString("X")}");
+                            funcStr.Add($"\t{instr.Mnemonic} {instr.Details.Operands[0].Register.Name}, #{instr.Details.Operands[1].Immediate}, loc_{(BaseAdress + addr).ToString("X")}");
                         }
                         else if (instr.Mnemonic == "cbz")
                         {
@@ -734,11 +784,13 @@ namespace swspl.nso
                                     jumps.Add(jmp);
                                 }
 
-                                funcStr.Add($"\t{instr.Mnemonic} loc_{(BaseAdress + jmp).ToString("X")}");
+                                funcStr.Add($"\t{instr.Mnemonic} loc_{(BaseAdress + jmp):X}");
                             }
                             else
                             {
-                                funcStr.Add($"\t{instr.Mnemonic} fn_{(BaseAdress + jmp).ToString("X")}");
+                                ulong addr = BaseAdress + jmp;
+                                funcStr.Add($"\t{instr.Mnemonic} fn_{(addr):X}");
+                                AssignAddrToSym(addr, $"fn_{addr:X}");
                             }
                         }
 
@@ -753,7 +805,7 @@ namespace swspl.nso
                             dataRegVals.Add(reg, (long)BaseAdress + dataAddr);
                         }
 
-                        funcStr.Add($"\tadrp {instr.Details.Operands[0].Register.Name}, off_REPLACEME@PAGE");
+                        funcStr.Add($"\tadrp {instr.Details.Operands[0].Register.Name}, off_REPLACEME");
                         DataRef r = new();
                         r.mRegister = reg;
                         r.mIndex = funcStr.Count - 1;
@@ -767,6 +819,17 @@ namespace swspl.nso
                             dataRefIndicies[(long)BaseAdress + dataAddr] = new();
                             dataRefIndicies[(long)BaseAdress + dataAddr].Add(r);
                         }
+                    }
+                    else if (instr.Mnemonic == "adr")
+                    {
+                        ulong dataAddr = (ulong)instr.Details.Operands[1].Immediate;
+
+                        if (!jumps.Contains(dataAddr))
+                        {
+                            jumps.Add(dataAddr);
+                        }
+
+                        funcStr.Add($"\t{instr.Mnemonic} {instr.Details.Operands[0].Register.Name}, loc_{(BaseAdress + dataAddr).ToString("X")}");
                     }
                     else if (instr.Mnemonic == "add")
                     {
@@ -814,7 +877,7 @@ namespace swspl.nso
                             f = f.Replace("REPLACEME", $"{finalAddr:X}");
                             funcStr[idx] = f;
                             dataRegVals.Remove(srcReg);
-                            funcStr.Add($"\tadd {destReg_Str}, {srcReg_Str}, off_{finalAddr:X}@PAGEOFF");
+                            funcStr.Add($"\tadd {destReg_Str}, {srcReg_Str}, :lo12:off_{finalAddr:X}");
                         }
                         else
                         {
@@ -831,7 +894,7 @@ namespace swspl.nso
                             string dstReg_Str = instr.Details.Operands[0].Register.Name;
                             string srcReg_Str = instr.Details.Operands[1].Memory.Base.Name;
                             long destAddr = instr.Details.Operands[1].Memory.Displacement;
-                            funcStr.Add($"\tldr {dstReg_Str}, [{srcReg_Str}, off_{(dataRegVals[srcReg]+destAddr):X}@PAGEOFF]");
+                            funcStr.Add($"\tldr {dstReg_Str}, [{srcReg_Str}, :lo12:off_{(dataRegVals[srcReg]+destAddr):X}]");
 
                             // now let's adjust our other loader (adrp)
                             List<DataRef> r = dataRefIndicies[dataRegVals[srcReg]];
@@ -904,6 +967,45 @@ namespace swspl.nso
             mTextFile.Add(BaseAdress + symAddr, funcStr);
         }
 
+        public void AssignAddrToSym(ulong addr, string name)
+        {
+            if (!mAddrToSym.ContainsKey(addr))
+            {
+                mAddrToSym.Add(addr, name);
+            }
+        }
+
+        public void AssignAllLinkedBranches(byte[] text, long startOffset)
+        {
+            using (CapstoneArm64Disassembler dis = CapstoneDisassembler.CreateArm64Disassembler(Arm64DisassembleMode.LittleEndian | Arm64DisassembleMode.Arm))
+            {
+                dis.EnableInstructionDetails = true;
+                // we have to enable this due to the fact that TRAP is invalid with capstone
+                dis.EnableSkipDataMode = true;
+                dis.DisassembleSyntax = DisassembleSyntax.Intel;
+
+                Arm64Instruction[] instrs = dis.Disassemble(text, startOffset);
+
+                for (int i = 0; i < instrs.Length; i++)
+                {
+                    Arm64Instruction instr = instrs[i];
+
+                    if (instr.Mnemonic == "bl")
+                    {
+                        ulong oper = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
+
+                        DynamicSymbol? jumpSym = mSymbolTable.GetSymbolAtAddr(oper);
+
+                        if (jumpSym == null)
+                        {
+                            AssignAddrToSym(BaseAdress + oper, $"fn_{(BaseAdress + oper):X}");
+                        }
+                    }
+                }
+
+            }
+        }
+
         public void SaveToFile()
         {
             List<string> file = new();
@@ -917,6 +1019,21 @@ namespace swspl.nso
                 {
                     file.Add(str);
                 }
+
+                ulong? above = Util.FindClosestKeyAboveNEq((long)e.Key, mTextFile.Keys);
+                ulong dist = 0;
+
+                if (above != null)
+                {
+                    int funcCount = mFuncInstructions[mAddrToSym[e.Key]].Length * 4;
+                    dist = (ulong)above - (e.Key + (ulong)funcCount);
+                }
+
+                if (dist != 0)
+                {
+                    file.Add($".fill {dist}, 1, 0");
+                }
+
                 file.Add("\n");
             }
 

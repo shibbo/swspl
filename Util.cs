@@ -73,13 +73,20 @@ namespace swspl
             {
                 case "b":
                 case "b.ne":
+                case "b.mi":
                 case "b.cc":
                 case "b.ge":
                 case "b.lt":
+                case "b.le":
                 case "b.gt":
                 case "b.lo":
+                case "b.ls":
+                case "b.hi":
                 case "b.hs":
                 case "b.eq":
+                case "b.pl":
+                case "b.vc":
+                case "b.vs":
                 case "tbz":
                 case "tbnz":
                 case "cbz":
@@ -102,10 +109,13 @@ namespace swspl
                 case "b.ls":
                 case "b.gt":
                 case "b.lo":
+                case "b.mi":
                 case "b.hs":
                 case "b.hi":
                 case "b.eq":
                 case "b.pl":
+                case "b.vc":
+                case "b.vs":
                     return true;
                 default:
                     return false;
@@ -121,6 +131,15 @@ namespace swspl
         public static ulong? FindClosestKeyAbove(long target, IEnumerable<ulong> keys)
         {
             var filteredKeys = keys.Where(k => (long)k >= target);
+            return filteredKeys.Any()
+                ? filteredKeys.Aggregate((minKey, nextKey) =>
+                    Math.Abs((long)nextKey - target) < Math.Abs((long)minKey - target) ? nextKey : minKey)
+                : (ulong?)null;
+        }
+
+        public static ulong? FindClosestKeyAboveNEq(long target, IEnumerable<ulong> keys)
+        {
+            var filteredKeys = keys.Where(k => (long)k > target);
             return filteredKeys.Any()
                 ? filteredKeys.Aggregate((minKey, nextKey) =>
                     Math.Abs((long)nextKey - target) < Math.Abs((long)minKey - target) ? nextKey : minKey)
