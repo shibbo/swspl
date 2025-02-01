@@ -22,19 +22,21 @@ namespace swspl.nso
     {
         public RelocationTable(BinaryReader reader, long numRelocs)
         {
+            List<DynamicReloc> relocs = new List<DynamicReloc>();
             for (int i = 0; i < numRelocs; i++)
             {
                 DynamicReloc rl = new(reader);
-                mRelocs.Add(rl);
+                relocs.Add(rl);
             }
+            mRelocs = (Lookup<ulong, DynamicReloc>)relocs.ToLookup(r => r.GetOffset(), r => r);
         }
 
         public DynamicReloc? GetRelocationAtOffset(ulong offset)
         {
-            return mRelocs.Find(r => r.GetOffset() == offset);
+            return mRelocs[offset].FirstOrDefault();
         }
 
-        public List<DynamicReloc> mRelocs = new();
+        public Lookup<ulong, DynamicReloc> mRelocs;
     }
 
     public class DynamicReloc
@@ -48,7 +50,7 @@ namespace swspl.nso
             mSymIdx = mInfo >> 32;
             mRelocType = (RelocType)(mInfo & 0xFFFFFFFF);
         }
-        
+
         public ulong GetOffset()
         {
             return mOffset;
