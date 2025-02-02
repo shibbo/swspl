@@ -18,7 +18,7 @@ $ swspl nso info /path/to/file.nso
 ### nso split
 Begins the splitting process for a given NSO file.
 ```shell
-$ swspl nso split /path/to/file.nso
+$ swspl nso split /path/to/file.nso /path/to/map.map
 ```
 
 ### nso dump

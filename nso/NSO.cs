@@ -5,6 +5,8 @@ using Gee.External.Capstone.Arm64;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Linq.Expressions;
+using System.Drawing;
+using System.Collections.Generic;
 
 namespace swspl.nso
 {
@@ -26,12 +28,10 @@ namespace swspl.nso
         string mFileName;
         public Dictionary<ulong, List<string>> mTextFile = new();
         public Dictionary<ulong, string> mAddrToSym = new();
-        private List<ulong> mUnknownFuncs = new();
         private static readonly ulong BaseAdress = 0x7100000000;
         private DynamicSymbolTable mSymbolTable;
         private DynamicStringTable mStringTable;
         private Dictionary<string, Arm64Instruction[]> mFuncInstructions = new();
-        private List<long> mRelocUnkFuncs = new();
         Dictionary<long, DataRefType> mRefTypes = new();
 
         byte[] mTextHash;
@@ -52,11 +52,12 @@ namespace swspl.nso
         RelocationTable mRelocTable;
         uint mFlags;
 
-        public NSO(string filepath, bool infoOnly)
+        public NSO(string filepath, string map, bool infoOnly)
         {
             mFileName = Path.GetFileNameWithoutExtension(filepath);
             if (File.Exists(filepath))
             {
+                Map.LoadMap(map);
                 using (BinaryReader reader = new BinaryReader(File.Open(filepath, FileMode.Open), Encoding.UTF8))
                 {
                     if (Util.ReadString(reader, 4) != "NSO0")
@@ -281,6 +282,30 @@ namespace swspl.nso
                         }
                     }
 
+                    /* read the rest of our .text */
+                    /* some MOD0s end with padding, some don't. there really isn't a way to tell. */
+                    while (true)
+                    {
+                        // ...so let's read until we hit nonzero
+                        if (textReader.ReadUInt32() != 0)
+                        {
+                            textReader.BaseStream.Position -= 4;
+                            break;
+                        }
+                    }
+
+                    // our functions are relative to the end of MOD0
+                    long startPos = textReader.BaseStream.Position;
+
+                    Console.WriteLine("Exporting .text...");
+
+                    // now we read the remaining portion of .text and map those instructions to symbols
+                    int remainingText = mTextSegement.GetSize() - (int)textReader.BaseStream.Position;
+                    byte[] textBytes = textReader.ReadBytes(remainingText);
+                    ParseTextSegment(textBytes, startPos);
+
+                    mRefTypes = mRefTypes.OrderBy(e => e.Key).ToDictionary();
+
                     Console.WriteLine("Exporting .data...");
 
                     // .dynamic is always after .data in my testing, so we can use that as a reference point to know our data size
@@ -331,11 +356,6 @@ namespace swspl.nso
                                     // most commonly PTMFs and virtuals
                                     if (mTextSegement.IsInRange((uint)offs))
                                     {
-                                        if (!mRelocUnkFuncs.Contains(offs)) 
-                                        {
-                                            mRelocUnkFuncs.Add(offs);
-                                        }
-
                                         dataFile.Add($"\t.quad fn_{offs.ToString("X")}");
                                     }
                                     else
@@ -348,7 +368,7 @@ namespace swspl.nso
 
                                         dataFile.Add($"\t.quad off_{offs.ToString("X")}");
                                     }
-                                    
+
                                 }
                             }
                             /* absolute or glob uses addends */
@@ -367,33 +387,6 @@ namespace swspl.nso
                             dataFile.Add($"\t.quad off_{l.ToString("X")}");
                         }
                     }
-
-                    /* read the rest of our .text */
-                    /* some MOD0s end with padding, some don't. there really isn't a way to tell. */
-                    while (true)
-                    {
-                        // ...so let's read until we hit nonzero
-                        if (textReader.ReadUInt32() != 0)
-                        {
-                            textReader.BaseStream.Position -= 4;
-                            break;
-                        }
-                    }
-
-                    // our functions are relative to the end of MOD0
-                    long startPos = textReader.BaseStream.Position;
-
-                    Console.WriteLine("Preprocessing .text...");
-                    AssignAllLinkedBranches(mText, 0);
-
-                    Console.WriteLine("Exporting .text...");
-
-                    // now we read the remaining portion of .text and map those instructions to symbols
-                    int remainingText = mTextSegement.GetSize() - (int)textReader.BaseStream.Position;
-                    byte[] textBytes = textReader.ReadBytes(remainingText);
-                    ParseTextSegment(textBytes, startPos);
-
-                    mRefTypes = mRefTypes.OrderBy(e => e.Key).ToDictionary();
 
                     Console.WriteLine("Exporting .rodata...");
 
@@ -428,7 +421,7 @@ namespace swspl.nso
                                     s = Encoding.UTF8.GetString(b);
 
                                     rodataFile.Add($".global off_{a:X}");
-                                    rodataFile.Add($".off_{a:X}:");
+                                    rodataFile.Add($"off_{a:X}:");
                                     s = s.Replace("\t", "\\t")
                                         .Replace("\"", "\\\"")
                                         .Replace("\r", "\\r")
@@ -439,7 +432,7 @@ namespace swspl.nso
                                 else
                                 {
                                     rodataFile.Add($".global off_{a:X}");
-                                    rodataFile.Add($".off_{a:X}:");
+                                    rodataFile.Add($"off_{a:X}:");
                                     for (long j = 0; j < dist; j++)
                                     {
                                         rodataFile.Add($"\t.byte 0x{b[j]:X}");
@@ -459,10 +452,33 @@ namespace swspl.nso
                                     hasAlignedForFloat = true;
                                 }
                                 byte[] val = dynReader.ReadBytes(4);
-                                float l = BitConverter.ToSingle(val);
+                                string s;
+
+                                if (val[0] == 0x00 && val[1] == 0x00 && val[2] == 0x80 && val[3] == 0xFF)
+                                {
+                                    s = "-Inf";
+                                }
+                                else if (val[0] == 0x00  && val[1] == 0x00 && val[2] == 0x80 && val[3] == 0x7F) {
+                                    s = "Inf";
+                                }
+                                else
+                                {
+                                    float l = BitConverter.ToSingle(val);
+                                    // clang doesn't like the default string representation of exponent floats
+                                    s = l.ToString("G");
+                                    if (s.Contains("E"))
+                                    {
+                                        s = l.ToString("0.0E+0");
+                                    }
+                                    else
+                                    {
+                                        s = l.ToString("0.0");
+                                    }
+                                }
+
                                 rodataFile.Add($".global off_{a:X}");
-                                rodataFile.Add($".off_{a:X}:");
-                                rodataFile.Add($"\t.float {l}");
+                                rodataFile.Add($"off_{a:X}:");
+                                rodataFile.Add($"\t.float {s}");
                                 i += 4;
                             }
                             else if (t == DataRefType.XWORD)
@@ -504,8 +520,6 @@ namespace swspl.nso
                     File.WriteAllLines($"{mFileName}\\asm\\got.s", gotFile.ToArray());
                     File.WriteAllLines($"{mFileName}\\asm\\data.s", dataFile.ToArray());
                     File.WriteAllLines($"{mFileName}\\asm\\rodata.s", rodataFile.ToArray());
-
-                    Console.WriteLine("Done.");
                 }
             }
             else
@@ -531,128 +545,17 @@ namespace swspl.nso
 
         public void ParseTextSegment(byte[] textBytes, long startPos)
         {
-
-            foreach (DynamicSymbol sym in mSymbolTable.mSymbols)
+            foreach(string key in Map.mSymbols.Keys)
             {
-                string symbolName = mStringTable.GetSymbolAtOffs(sym.mStrTableOffs);
-                // symbols tied to a size of 0 are not .text
-                if (sym.mSize == 0)
-                {
-                    continue;
-                }
-
-                /* check to see if our symbol is even in the .text section */
-                if (!mTextSegement.IsInRange((uint)sym.mValue - (uint)startPos))
-                {
-                    continue;
-                }
-
-                // constructors (ctors) and destructors (dtors) have multiple types
-                // however, clang resolves their addresses to the same function address if there is no need for one of each type
-                // so here, we filter them out
-                if (mTextFile.ContainsKey(sym.mValue + BaseAdress))
-                {
-                    continue;
-                }
-
-                AssignAddrToSym(sym.mValue + BaseAdress, symbolName);
-                long pos = (long)sym.mValue - startPos;
-                byte[] funcBytes = textBytes.Skip((int)pos).Take((int)sym.mSize).ToArray();
-                ParseFunction(sym, symbolName, funcBytes, pos, pos + startPos);
+                Map.Symbol symbol = Map.mSymbols[key];
+                AssignAddrToSym(symbol.GetAddr(), key);
+                long pos = (long)(symbol.GetAddr() - BaseAdress) - startPos;
+                byte[] funcBytes = textBytes.Skip((int)pos).Take((int)symbol.GetSize()).ToArray();
+                ParseFunction((ulong)symbol.GetSize(), symbol.GetAddr() - BaseAdress, key, funcBytes, pos, pos + startPos);
             }
 
-            // now those are the functions that we have symbols for
-            // let's do the ones that do not have symbols, as they are a bit harder to parse
-            // let's first order our dictionary
             mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
-            mRelocUnkFuncs.Sort();
-
-            // now that we have all of our functions that are referenced in .text, now we can go for the ones referenced by .data
-            foreach (long offs in mRelocUnkFuncs)
-            {
-                if (mUnknownFuncs.Contains((ulong)offs))
-                {
-                    mUnknownFuncs.Remove((ulong)offs);
-                }
-
-                ulong? closestKeyAbove = Util.FindClosestKeyAbove(offs, mAddrToSym.Keys);
-
-                long? nextOffset = mRelocUnkFuncs
-                .Where(offset => offset > offs)
-                .OrderBy(offset => offset)
-                .FirstOrDefault();
-
-                // is our next unknown offset CLOSER to our function?
-                if ((ulong)nextOffset < closestKeyAbove)
-                {
-                    ulong funcSize = (ulong)nextOffset - (ulong)offs;
-                    long pos = offs - (long)BaseAdress - startPos;
-                    byte[] funcBytes = textBytes.Skip((int)pos).Take((int)funcSize).ToArray();
-                    ParseFunction(funcSize, (ulong)offs - BaseAdress, $"fn_{offs.ToString("X")}", funcBytes, pos, pos + startPos);
-                    AssignAddrToSym((ulong)offs, $"fn_{offs:X}");
-                }
-                else
-                {
-                    if (closestKeyAbove != null)
-                    {
-                        DynamicSymbol? aboveSym = mSymbolTable.GetSymbolAtAddr((ulong)closestKeyAbove - BaseAdress);
-
-                        if (aboveSym != null)
-                        {
-                            ulong funcSize = aboveSym.mValue - ((ulong)offs - BaseAdress);
-                            long pos = offs - (long)BaseAdress - startPos;
-                            byte[] funcBytes = textBytes.Skip((int)pos).Take((int)funcSize).ToArray();
-                            ParseFunction(funcSize, (ulong)offs - BaseAdress, $"fn_{offs.ToString("X")}", funcBytes, pos, pos + startPos);
-                            AssignAddrToSym((ulong)offs, $"fn_{offs:X}");
-                        }
-                    }
-                }
-            }
-
             mAddrToSym = mAddrToSym.OrderBy(e => e.Key).ToDictionary();
-
-            List<ulong> remainingUnknowns = mUnknownFuncs.ToList();
-            HashSet<ulong> processedOffsets = new(); // Keep track of processed offsets
-
-            while (remainingUnknowns.Count > 0)
-            {
-                ulong offs = remainingUnknowns[0];
-                remainingUnknowns.RemoveAt(0);
-
-                if (processedOffsets.Contains(offs))
-                {
-                    continue;
-                }
-
-                processedOffsets.Add(offs);
-
-                var nearest = mAddrToSym.FirstOrDefault(k => k.Key > offs);
-
-                if (nearest.Value != null)
-                {
-                    ulong funcSize = nearest.Key - offs;
-                    long pos = ((long)offs - (long)BaseAdress) - startPos;
-                    byte[] funcBytes = textBytes.Skip((int)pos).Take((int)funcSize).ToArray();
-                    if (!mFuncInstructions.ContainsKey($"fn_{offs:X}"))
-                    {
-                        ParseFunction(funcSize, (offs - (ulong)BaseAdress), $"fn_{offs:X}", funcBytes, pos, pos + startPos);
-                        AssignAddrToSym(offs, $"fn_{offs:X}");
-                    }
-                }
-
-                foreach (ulong newOffs in mUnknownFuncs.Except(remainingUnknowns).Except(processedOffsets))
-                {
-                    remainingUnknowns.Add(newOffs);
-                }
-            }
-
-            // reorder them again
-            mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
-        }
-
-        private void ParseFunction(DynamicSymbol sym, string symbolName, byte[] funcBytes, long pos, long startOffset)
-        {
-            ParseFunction(sym.mSize, sym.mValue, symbolName, funcBytes, pos, startOffset);
         }
 
         private void ParseFunction(ulong size, ulong symAddr, string symbolName, byte[] funcBytes, long pos, long startOffset)
@@ -684,38 +587,17 @@ namespace swspl.nso
                         {
                             funcStr.Add($"\ttrap");
                         }
-                        /* we will only run into these on unnamed functions */
                         else if (instr.Operand == "0x00, 0x00, 0x00, 0x00")
                         {
-                            instrs = instrs.Take(i).ToArray();
-                            break;
+                            funcStr.Add($".fill 4, 1, 0");
                         }
                     }
                     // bl need to be defined differently
                     else if (instr.Mnemonic == "bl")
                     {
                         ulong oper = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
-
-                        DynamicSymbol? jumpSym = mSymbolTable.GetSymbolAtAddr(oper);
-
-                        string jumpSymName = "";
-
-                        if (jumpSym != null)
-                        {
-                            jumpSymName = $"bl {mStringTable.GetSymbolAtOffs(jumpSym.mStrTableOffs)}";
-                        }
-                        else
-                        {
-                            ulong addr = BaseAdress + oper;
-                            if (!mUnknownFuncs.Contains(addr))
-                            {
-                                mUnknownFuncs.Add(addr);
-                                AssignAddrToSym(addr, $"fn_{addr:X}");
-                            }
-                            jumpSymName = $"bl fn_{(BaseAdress + oper).ToString("X")}";
-                        }
-
-                        funcStr.Add($"\t{jumpSymName}");
+                        string sym = Map.GetSymbolAtAddr(BaseAdress + oper);
+                        funcStr.Add($"\tbl {sym}");
                     }
                     else if (Util.IsBranchInstr(instr.Mnemonic))
                     {
@@ -772,7 +654,7 @@ namespace swspl.nso
                             // make sure we account for it
                             ulong jmp = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
 
-                            ulong range = (ulong)pos + size;
+                            ulong range = size + (ulong)startOffset;
                             // is our jump in range of our current function?
                             // if it is, it is a local branch
                             // if not, it is a function call
@@ -788,9 +670,9 @@ namespace swspl.nso
                             }
                             else
                             {
-                                ulong addr = BaseAdress + jmp;
-                                funcStr.Add($"\t{instr.Mnemonic} fn_{(addr):X}");
-                                AssignAddrToSym(addr, $"fn_{addr:X}");
+                                string sym = Map.GetSymbolAtAddr(BaseAdress + jmp);
+                                funcStr.Add($"\t{instr.Mnemonic} {sym}");
+                                
                             }
                         }
 
@@ -928,7 +810,6 @@ namespace swspl.nso
                                 mRefTypes.Add(dataRegVals[srcReg] + destAddr, t);
                             }
 
-
                             dataRefIndicies[dataRegVals[srcReg]].RemoveAt(refIdx);
 
                             string f = funcStr.ElementAt(idx);
@@ -973,36 +854,9 @@ namespace swspl.nso
             {
                 mAddrToSym.Add(addr, name);
             }
-        }
-
-        public void AssignAllLinkedBranches(byte[] text, long startOffset)
-        {
-            using (CapstoneArm64Disassembler dis = CapstoneDisassembler.CreateArm64Disassembler(Arm64DisassembleMode.LittleEndian | Arm64DisassembleMode.Arm))
+            else
             {
-                dis.EnableInstructionDetails = true;
-                // we have to enable this due to the fact that TRAP is invalid with capstone
-                dis.EnableSkipDataMode = true;
-                dis.DisassembleSyntax = DisassembleSyntax.Intel;
-
-                Arm64Instruction[] instrs = dis.Disassemble(text, startOffset);
-
-                for (int i = 0; i < instrs.Length; i++)
-                {
-                    Arm64Instruction instr = instrs[i];
-
-                    if (instr.Mnemonic == "bl")
-                    {
-                        ulong oper = Convert.ToUInt64(instr.Operand.Replace("#", ""), 16);
-
-                        DynamicSymbol? jumpSym = mSymbolTable.GetSymbolAtAddr(oper);
-
-                        if (jumpSym == null)
-                        {
-                            AssignAddrToSym(BaseAdress + oper, $"fn_{(BaseAdress + oper):X}");
-                        }
-                    }
-                }
-
+                mAddrToSym[addr] = name;
             }
         }
 
@@ -1013,20 +867,20 @@ namespace swspl.nso
             foreach (KeyValuePair<ulong, List<string>> e in mTextFile)
             {
                 string sym = mAddrToSym[e.Key];
-                file.Add($".global {sym}");
-                file.Add($"{sym}:");
-                foreach (string str in e.Value)
-                {
-                    file.Add(str);
-                }
 
                 ulong? above = Util.FindClosestKeyAboveNEq((long)e.Key, mTextFile.Keys);
                 ulong dist = 0;
 
                 if (above != null)
                 {
-                    int funcCount = mFuncInstructions[mAddrToSym[e.Key]].Length * 4;
-                    dist = (ulong)above - (e.Key + (ulong)funcCount);
+                    dist = (ulong)above - (e.Key + (ulong)Map.GetSymbolSize(sym));
+                }
+
+                file.Add($".global {sym}");
+                file.Add($"{sym}:");
+                foreach (string str in e.Value)
+                {
+                    file.Add(str);
                 }
 
                 if (dist != 0)

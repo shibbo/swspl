@@ -57,9 +57,10 @@ class Program
                 }
 
                 string filename = args[2];
+                string map = args[3];
                 if (primaryCommand == "nso")
                 {
-                    NSO nso = new NSO(filename, true);
+                    NSO nso = new NSO(filename, map, true);
                     nso.PrintInfo();
                 }
                 else if (primaryCommand == "nro")
@@ -69,17 +70,19 @@ class Program
                 break;
 
             case "split":
-                if (args.Length < 3)
+                if (args.Length < 4)
                 {
-                    Console.WriteLine($"Error: The '{primaryCommand} info' command requires a filename.");
+                    Console.WriteLine($"Error: The '{primaryCommand} info' command requires a filename and symbol map.");
                     return;
                 }
 
                 filename = args[2];
+                map = args[3];
                 if (primaryCommand == "nso")
                 {
-                    NSO nso = new NSO(filename, false);
+                    NSO nso = new NSO(filename, map, false);
                     nso.SaveToFile();
+                    Console.WriteLine("Done.");
                 }
                 else if (primaryCommand == "nro")
                 {

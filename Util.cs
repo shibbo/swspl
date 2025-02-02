@@ -153,7 +153,8 @@ namespace swspl
             {
                 byte b = bytes[i];
 
-                if (b <= 0x7F)
+                // b != 0 helps prevent false positives
+                if (b <= 0x7F && b != 0)
                 {
                     i++;
                 }
