@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection.Metadata.Ecma335;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -93,6 +94,16 @@ namespace swspl.nso
             }
         }
 
+        public PLTEntry GetEntryAtAddr(long addr)
+        {
+            return mEntries.First(e => e.mOffset == addr);
+        }
+
+        public PLTEntry GetEntryAtIdx(int idx)
+        {
+            return mEntries[idx];
+        }
+
         public int GetNumJumps()
         {
             return mEntries.Where(e => e.mRelocType == RelocType.R_AARCH64_JUMP_SLOT).Count();
@@ -109,13 +120,15 @@ namespace swspl.nso
             mInfo = reader.ReadInt64();
             mAddend = reader.ReadInt64();
 
+            mSymIdx = mInfo >> 32;
             mRelocType = (RelocType)(mInfo & 0xFFFFFFFF);
         }
 
-        long mOffset;
+        public long mOffset;
         long mInfo;
         long mAddend;
         public RelocType mRelocType;
+        public long mSymIdx;
     }
 
     public class GlobalPLT
@@ -129,6 +142,6 @@ namespace swspl.nso
             }
         }
 
-        List<long> mAddrs = new();
+        public List<long> mAddrs = new();
     }
 }

@@ -248,6 +248,33 @@ namespace swspl.nso
                     // jump to our memory offset in .got itself to make identifying relocations easier
                     ulong baseAddr = (ulong)(gotStart + mDataSegment.GetMemoryOffset());
 
+                    Console.WriteLine("Exporting .got.plt");
+
+                    List<string> gotPltFile = new();
+                    gotPltFile.Add(".section \".got.plt\"\n");
+                    long gotPltMemOffs = gotPltOffs + mDataSegment.GetMemoryOffset();
+                    int pltIdx = 0;
+
+                    for (int i = 0; i < 3; i++)
+                    {
+                        gotPltFile.Add($".global off_{gotPltMemOffs:X}");
+                        gotPltFile.Add($"off_{gotPltMemOffs:X}:");
+                        gotPltFile.Add($"\t.quad 0");
+                        gotPltMemOffs += 8;
+                    }
+
+                    foreach (ulong e in globalPLT.mAddrs)
+                    {
+                        PLTEntry entr = plt.GetEntryAtIdx(pltIdx);
+                        string sym = mStringTable.GetSymbolAtOffs(mSymbolTable.GetSymbolAtIdx((int)entr.mSymIdx).mStrTableOffs);
+                        ulong o = (ulong)gotPltMemOffs + BaseAdress;
+                        gotPltFile.Add($".global off_{o:X}");
+                        gotPltFile.Add($"off_{o:X}:");
+                        gotPltFile.Add($"\t.quad {sym}");
+                        gotPltMemOffs += 8;
+                        pltIdx++;
+                    }
+
                     Console.WriteLine("Exporting .got...");
 
                     List<string> gotFile = new();
@@ -266,7 +293,16 @@ namespace swspl.nso
                             {
                                 case RelocType.R_AARCH64_RELATIVE:
                                     string addend = ((long)BaseAdress + reloc.GetAddend()).ToString("X");
-                                    gotFile.Add($"\t.quad off_{addend}");
+                                    DynamicSymbol? s = mSymbolTable.GetSymbolAtAddr((ulong)reloc.GetAddend());
+
+                                    if (s != null)
+                                    {
+                                        gotFile.Add($"\t.quad {mStringTable.GetSymbolAtOffs(s.mStrTableOffs)}");
+                                    }
+                                    else
+                                    {
+                                        gotFile.Add($"\t.quad off_{addend}");
+                                    }
 
                                     if (!mRefTypes.ContainsKey((long)BaseAdress + reloc.GetAddend()))
                                     {
@@ -306,6 +342,24 @@ namespace swspl.nso
 
                     mRefTypes = mRefTypes.OrderBy(e => e.Key).ToDictionary();
 
+                    Console.WriteLine("Exporting .bss...");
+                    // .bss is a lot of empty data that we can only reference by its usage
+                    long bssStart = (long)BaseAdress + mModule.mBssStart;
+                    List<string> bssFile = new();
+                    bssFile.Add(".section \".bss\"\n");
+                    for (uint i = 0; i < bssSize; i++)
+                    {
+                        if (mRefTypes.ContainsKey(bssStart))
+                        {
+                            bssFile.Add($".global off_{bssStart:X}");
+                            bssFile.Add($"off_{bssStart:X}:");
+                        }
+
+                        bssFile.Add("\t.skip 1");
+                        bssStart++;
+                    }
+
+
                     Console.WriteLine("Exporting .data...");
 
                     // .dynamic is always after .data in my testing, so we can use that as a reference point to know our data size
@@ -318,19 +372,33 @@ namespace swspl.nso
                     for (ulong i = 0; i < dataEntryStart; i += 8)
                     {
                         ulong addr = dataBaseOffs + i;
+                        bool labeled = false;
+
                         DynamicReloc? reloc = mRelocTable.GetRelocationAtOffset(addr);
 
                         if (mRefTypes.ContainsKey((long)BaseAdress + (long)addr))
                         {
-                            dataFile.Add($".global off_{((long)BaseAdress + (long)addr):X}");
-                            dataFile.Add($"off_{((long)BaseAdress + (long)addr):X}:");
+                            DynamicSymbol? sym = mSymbolTable.GetSymbolAtAddr(addr);
+
+                            if (sym != null)
+                            {
+                                string s = mStringTable.GetSymbolAtOffs(sym.mStrTableOffs);
+                                dataFile.Add($".global {s}");
+                                dataFile.Add($"{s}:");
+                                labeled = true;
+                            }
+                            else
+                            {
+                                dataFile.Add($".global off_{((long)BaseAdress + (long)addr):X}");
+                                dataFile.Add($"off_{((long)BaseAdress + (long)addr):X}:");
+                            }
                         }
 
                         if (reloc != null)
                         {
                             DynamicSymbol? sym = mSymbolTable.GetSymbolAtAddr(addr);
 
-                            if (sym != null)
+                            if (sym != null && labeled == false)
                             {
                                 string s = mStringTable.GetSymbolAtOffs(sym.mStrTableOffs);
                                 dataFile.Add($".global {s}");
@@ -368,7 +436,6 @@ namespace swspl.nso
 
                                         dataFile.Add($"\t.quad off_{offs.ToString("X")}");
                                     }
-
                                 }
                             }
                             /* absolute or glob uses addends */
@@ -384,9 +451,11 @@ namespace swspl.nso
                             byte[] val = new byte[8];
                             Array.Copy(mData, (int)i, val, 0, 8);
                             long l = BitConverter.ToInt64(val);
-                            dataFile.Add($"\t.quad off_{l.ToString("X")}");
+                            dataFile.Add($"\t.quad 0x{l:X}");
                         }
                     }
+
+                    mRefTypes = mRefTypes.OrderBy(e => e.Key).ToDictionary();
 
                     Console.WriteLine("Exporting .rodata...");
 
@@ -423,6 +492,7 @@ namespace swspl.nso
                                     rodataFile.Add($".global off_{a:X}");
                                     rodataFile.Add($"off_{a:X}:");
                                     s = s.Replace("\t", "\\t")
+                                        .Replace("\\", "\\\\")
                                         .Replace("\"", "\\\"")
                                         .Replace("\r", "\\r")
                                         .Replace("\n", "\\n");
@@ -518,8 +588,10 @@ namespace swspl.nso
 
                     Directory.CreateDirectory($"{mFileName}\\asm");
                     File.WriteAllLines($"{mFileName}\\asm\\got.s", gotFile.ToArray());
+                    File.WriteAllLines($"{mFileName}\\asm\\got.plt.s", gotPltFile.ToArray());
                     File.WriteAllLines($"{mFileName}\\asm\\data.s", dataFile.ToArray());
                     File.WriteAllLines($"{mFileName}\\asm\\rodata.s", rodataFile.ToArray());
+                    File.WriteAllLines($"{mFileName}\\asm\\bss.s", bssFile.ToArray());
                 }
             }
             else
