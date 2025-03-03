@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using K4os.Compression.LZ4;
 using Gee.External.Capstone;
 using Gee.External.Capstone.Arm64;
@@ -491,11 +491,11 @@ namespace swspl.nso
 
                                     rodataFile.Add($".global off_{a:X}");
                                     rodataFile.Add($"off_{a:X}:");
-                                    s = s.Replace("\t", "\\t")
-                                        .Replace("\\", "\\\\")
-                                        .Replace("\"", "\\\"")
-                                        .Replace("\r", "\\r")
-                                        .Replace("\n", "\\n");
+                                    s = s.Replace("\t", "/t")
+                                        .Replace("/", "//")
+                                        .Replace("\"", "/\"")
+                                        .Replace("\r", "/r")
+                                        .Replace("\n", "/n");
                                     rodataFile.Add($"\t.string \"{s}\"");
                                     rodataFile.Add("\t.byte 0");
                                 }
@@ -586,12 +586,12 @@ namespace swspl.nso
 
                     Console.WriteLine("Writing to files...");
 
-                    Directory.CreateDirectory($"{mFileName}\\asm");
-                    File.WriteAllLines($"{mFileName}\\asm\\got.s", gotFile.ToArray());
-                    File.WriteAllLines($"{mFileName}\\asm\\got.plt.s", gotPltFile.ToArray());
-                    File.WriteAllLines($"{mFileName}\\asm\\data.s", dataFile.ToArray());
-                    File.WriteAllLines($"{mFileName}\\asm\\rodata.s", rodataFile.ToArray());
-                    File.WriteAllLines($"{mFileName}\\asm\\bss.s", bssFile.ToArray());
+                    Directory.CreateDirectory($"{mFileName}/asm");
+                    File.WriteAllLines($"{mFileName}/asm/got.s", gotFile.ToArray());
+                    File.WriteAllLines($"{mFileName}/asm/got.plt.s", gotPltFile.ToArray());
+                    File.WriteAllLines($"{mFileName}/asm/data.s", dataFile.ToArray());
+                    File.WriteAllLines($"{mFileName}/asm/rodata.s", rodataFile.ToArray());
+                    File.WriteAllLines($"{mFileName}/asm/bss.s", bssFile.ToArray());
                 }
             }
             else
@@ -963,17 +963,17 @@ namespace swspl.nso
                 file.Add("\n");
             }
 
-            Directory.CreateDirectory($"{mFileName}\\asm");
-            File.WriteAllLines($"{mFileName}\\asm\\text.s", file.ToArray());
+            Directory.CreateDirectory($"{mFileName}/asm");
+            File.WriteAllLines($"{mFileName}/asm/text.s", file.ToArray());
             ExportSectionBinaries();
         }
 
         public void ExportSectionBinaries()
         {
-            Directory.CreateDirectory($"{mFileName}\\bin");
-            File.WriteAllBytes($"{mFileName}\\bin\\text.bin", mText);
-            File.WriteAllBytes($"{mFileName}\\bin\\data.bin", mData);
-            File.WriteAllBytes($"{mFileName}\\bin\\rodata.bin", mRodata);
+            Directory.CreateDirectory($"{mFileName}/bin");
+            File.WriteAllBytes($"{mFileName}/bin/text.bin", mText);
+            File.WriteAllBytes($"{mFileName}/bin/data.bin", mData);
+            File.WriteAllBytes($"{mFileName}/bin/rodata.bin", mRodata);
         }
 
         public void PrintInfo()
@@ -1077,8 +1077,10 @@ namespace swspl.nso
 
             Console.WriteLine($"{"Offset".PadRight(12)} | {"Info".PadRight(12)} | {"Type".PadRight(16)} | {"Value".PadRight(8)} | {"Sym Name + Addend".PadRight(12)}");
             Console.WriteLine(new string('-', 84));
+            
+            var allRelocs = mRelocTable.mRelocs.SelectMany(g => g).ToList();  // Flatten the groups
 
-            foreach (DynamicReloc reloc in mRelocTable.mRelocs)
+            foreach (DynamicReloc reloc in allRelocs)
             {
                 string symVal = "";
                 string addend = $"0x{reloc.GetAddend()}";
@@ -1138,3 +1140,4 @@ namespace swspl.nso
         }
     }
 }
+
