@@ -391,6 +391,7 @@ namespace swspl.nso
                             {
                                 dataFile.Add($".global off_{((long)BaseAdress + (long)addr):X}");
                                 dataFile.Add($"off_{((long)BaseAdress + (long)addr):X}:");
+                                labeled = true;
                             }
                         }
 
@@ -424,6 +425,13 @@ namespace swspl.nso
                                     // most commonly PTMFs and virtuals
                                     if (mTextSegement.IsInRange((uint)offs))
                                     {
+
+                                        if (labeled == false)
+                                        {
+                                            dataFile.Add($".global off_{((long)BaseAdress + (long)addr):X}");
+                                            dataFile.Add($"off_{((long)BaseAdress + (long)addr):X}:");
+                                        }
+
                                         dataFile.Add($"\t.quad fn_{offs.ToString("X")}");
                                     }
                                     else
@@ -432,6 +440,12 @@ namespace swspl.nso
                                         {
                                             DataRefType t = DataRefType.QWORD;
                                             mRefTypes.Add(offs, t);
+                                        }
+
+                                        if (labeled == false)
+                                        {
+                                            dataFile.Add($".global off_{((long)BaseAdress + (long)addr):X}");
+                                            dataFile.Add($"off_{((long)BaseAdress + (long)addr):X}:");
                                         }
 
                                         dataFile.Add($"\t.quad off_{offs.ToString("X")}");
@@ -448,6 +462,13 @@ namespace swspl.nso
                         }
                         else
                         {
+
+                            if (labeled == false)
+                            {
+                                dataFile.Add($".global off_{((long)BaseAdress + (long)addr):X}");
+                                dataFile.Add($"off_{((long)BaseAdress + (long)addr):X}:");
+                            }
+
                             byte[] val = new byte[8];
                             Array.Copy(mData, (int)i, val, 0, 8);
                             long l = BitConverter.ToInt64(val);
@@ -560,6 +581,9 @@ namespace swspl.nso
                                     i = (i + (0x10Ul - 10Ul)) & ~(0x10Ul - 10Ul);
                                     hasAlignedForData = true;
                                 }
+
+                                rodataFile.Add($".global off_{a:X}");
+                                rodataFile.Add($"off_{a:X}:");
 
                                 for (long j = 0; j < 16; j++)
                                 {

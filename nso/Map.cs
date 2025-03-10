@@ -17,7 +17,7 @@ namespace swspl.nso
                 string[] spl = line.Split("\t");
                 string sym = spl[0];
 
-                if (sym == "Function name")
+                if (sym == "Function name" || mSymbols.ContainsKey(sym))
                 {
                     continue;
                 }
