@@ -130,7 +130,7 @@ namespace swspl.nso
                         mRodata = reader.ReadBytes(mRodataSegment.GetSize());
                     }
 
-                    // .data=
+                    // .data
                     reader.BaseStream.Seek(mDataSegment.GetOffset(), SeekOrigin.Begin);
                     // are we compressed?
                     if (IsDataCompr())
@@ -972,6 +972,7 @@ namespace swspl.nso
                     dist = (ulong)above - (e.Key + (ulong)Map.GetSymbolSize(sym));
                 }
 
+                file.Add($"# 0x{e.Key:X} | 0x{(ulong)Map.GetSymbolSize(sym):X}");
                 file.Add($".global {sym}");
                 file.Add($"{sym}:");
                 foreach (string str in e.Value)
