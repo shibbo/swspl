@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Linq.Expressions;
 using System.Drawing;
 using System.Collections.Generic;
+using System.Diagnostics.SymbolStore;
 
 namespace swspl.nso
 {
@@ -18,6 +19,7 @@ namespace swspl.nso
 
     public enum DataRefType 
     { 
+        BYTE,
         QWORD,
         XWORD,
         SINGLE
@@ -257,8 +259,9 @@ namespace swspl.nso
 
                     for (int i = 0; i < 3; i++)
                     {
-                        gotPltFile.Add($".global off_{gotPltMemOffs:X}");
-                        gotPltFile.Add($"off_{gotPltMemOffs:X}:");
+                        ulong o = (ulong)gotPltMemOffs + BaseAdress;
+                        gotPltFile.Add($".global off_{o:X}");
+                        gotPltFile.Add($"off_{o:X}:");
                         gotPltFile.Add($"\t.quad 0");
                         gotPltMemOffs += 8;
                     }
@@ -351,8 +354,17 @@ namespace swspl.nso
                     {
                         if (mRefTypes.ContainsKey(bssStart))
                         {
-                            bssFile.Add($".global off_{bssStart:X}");
-                            bssFile.Add($"off_{bssStart:X}:");
+                            string sym = Map.GetSymbolAtAddr((ulong)bssStart);
+                            if (sym != "UNK")
+                            {
+                                bssFile.Add($".global {sym}");
+                                bssFile.Add($"{sym}:");
+                            }
+                            else
+                            {
+                                bssFile.Add($".global off_{bssStart:X}");
+                                bssFile.Add($"off_{bssStart:X}:");
+                            }
                         }
 
                         bssFile.Add("\t.skip 1");
@@ -415,6 +427,11 @@ namespace swspl.nso
                                 if (refSym != null)
                                 {
                                     string curSym = mStringTable.GetSymbolAtOffs(refSym.mStrTableOffs);
+                                    if (labeled == false)
+                                    {
+                                        dataFile.Add($".global off_{((long)BaseAdress + (long)addr):X}");
+                                        dataFile.Add($"off_{((long)BaseAdress + (long)addr):X}:");
+                                    }
                                     dataFile.Add($"\t.quad {curSym}");
                                 }
                                 else
@@ -425,7 +442,6 @@ namespace swspl.nso
                                     // most commonly PTMFs and virtuals
                                     if (mTextSegement.IsInRange((uint)offs))
                                     {
-
                                         if (labeled == false)
                                         {
                                             dataFile.Add($".global off_{((long)BaseAdress + (long)addr):X}");
@@ -457,22 +473,64 @@ namespace swspl.nso
                             {
                                 DynamicSymbol? refSym = mSymbolTable.GetSymbolAtIdx((int)reloc.GetSymIdx());
                                 string curSym = mStringTable.GetSymbolAtOffs(refSym.mStrTableOffs);
+                                if (labeled == false)
+                                {
+                                    dataFile.Add($".global off_{((long)BaseAdress + (long)addr):X}");
+                                    dataFile.Add($"off_{((long)BaseAdress + (long)addr):X}:");
+                                }
                                 dataFile.Add($"\t.quad {curSym}");
                             }
                         }
                         else
                         {
-
+                            long a = (long)BaseAdress + (long)addr;
                             if (labeled == false)
                             {
-                                dataFile.Add($".global off_{((long)BaseAdress + (long)addr):X}");
-                                dataFile.Add($"off_{((long)BaseAdress + (long)addr):X}:");
+                                dataFile.Add($".global off_{a:X}");
+                                dataFile.Add($"off_{a:X}:");
                             }
 
-                            byte[] val = new byte[8];
-                            Array.Copy(mData, (int)i, val, 0, 8);
-                            long l = BitConverter.ToInt64(val);
-                            dataFile.Add($"\t.quad 0x{l:X}");
+                            if (mRefTypes.ContainsKey(a))
+                            {
+                                DataRefType t = mRefTypes[(long)a];
+                                if (t == DataRefType.BYTE)
+                                {
+                                    byte[] val = new byte[1];
+                                    Array.Copy(mData, (int)i, val, 0, 1);
+                                    int l = val[0];
+                                    dataFile.Add($"\t.byte 0x{l:X}");
+
+                                    for (int j = 0; j < 3; j++)
+                                    {
+                                        dataFile.Add($"\t.byte 0");
+                                    }
+                                }
+                                else if (t == DataRefType.QWORD)
+                                {
+                                    byte[] val = new byte[8];
+                                    Array.Copy(mData, (int)i, val, 0, 8);
+                                    long l = BitConverter.ToInt64(val);
+                                    dataFile.Add($"\t.quad 0x{l:X}");
+                                }
+                                else if (t == DataRefType.SINGLE)
+                                {
+                                    byte[] val = new byte[4];
+                                    Array.Copy(mData, (int)i, val, 0, 4);
+                                    float l = BitConverter.ToSingle(val);
+                                    dataFile.Add($"\t.float {l}");
+                                }
+                                else
+                                {
+                                    Console.WriteLine($"unsupported data ref type alert: {t}");
+                                }
+                            }
+                            else
+                            {
+                                byte[] val = new byte[8];
+                                Array.Copy(mData, (int)i, val, 0, 8);
+                                long l = BitConverter.ToInt64(val);
+                                dataFile.Add($"\t.quad 0x{l:X}");
+                            }
                         }
                     }
 
@@ -592,6 +650,20 @@ namespace swspl.nso
                                 }
 
                                 i += 16;
+                            }
+                            else if (t == DataRefType.BYTE)
+                            {
+                                rodataFile.Add($".global off_{a:X}");
+                                rodataFile.Add($"off_{a:X}:");
+                                byte b = dynReader.ReadByte();
+                                rodataFile.Add($"\t.byte 0x{b:X}");
+
+                                for (long j = 0; j < 3; j++)
+                                {
+                                    rodataFile.Add($"\t.byte 0");
+                                }
+
+                                i += 4;
                             }
                         }
                         else
@@ -833,7 +905,6 @@ namespace swspl.nso
                                 refIdx++;
                             }
 
-                            uint a = (uint)finalAddr;
                             if (!mRefTypes.ContainsKey(finalAddr))
                             {
                                 DataRefType t = DataRefType.QWORD;
@@ -851,6 +922,22 @@ namespace swspl.nso
 
                             dataRefIndicies[dataRegVals[srcReg]].RemoveAt(refIdx);
 
+                            if (Map.IsInText((ulong)finalAddr))
+                            {
+                                string sym = Map.GetSymbolAtAddr((ulong)finalAddr);
+
+                                if (sym != "UNK")
+                                {
+                                    funcStr.Add($"\tadd {destReg_Str}, {srcReg_Str}, :lo12:{sym}");
+
+                                    string ff = funcStr.ElementAt(idx);
+                                    ff = ff.Replace("off_REPLACEME", $"{sym}");
+                                    funcStr[idx] = ff;
+                                    dataRegVals.Remove(srcReg);
+                                    continue;
+                                }
+                            }
+
                             string f = funcStr.ElementAt(idx);
                             f = f.Replace("REPLACEME", $"{finalAddr:X}");
                             funcStr[idx] = f;
@@ -863,7 +950,7 @@ namespace swspl.nso
                             funcStr.Add($"\t{instr}");
                         }
                     }
-                    else if (instr.Mnemonic == "ldr")
+                    else if (instr.Mnemonic == "ldr" || instr.Mnemonic == "str")
                     {
                         Arm64RegisterId srcReg = instr.Details.Operands[1].Memory.Base.Id;
 
@@ -872,7 +959,14 @@ namespace swspl.nso
                             string dstReg_Str = instr.Details.Operands[0].Register.Name;
                             string srcReg_Str = instr.Details.Operands[1].Memory.Base.Name;
                             long destAddr = instr.Details.Operands[1].Memory.Displacement;
-                            funcStr.Add($"\tldr {dstReg_Str}, [{srcReg_Str}, :lo12:off_{(dataRegVals[srcReg]+destAddr):X}]");
+                            if (instr.Mnemonic == "ldr")
+                            {
+                                funcStr.Add($"\tldr {dstReg_Str}, [{srcReg_Str}, :lo12:off_{(dataRegVals[srcReg] + destAddr):X}]");
+                            }
+                            else
+                            {
+                                funcStr.Add($"\tstr {dstReg_Str}, [{srcReg_Str}, :lo12:off_{(dataRegVals[srcReg] + destAddr):X}]");
+                            }
 
                             // now let's adjust our other loader (adrp)
                             List<DataRef> r = dataRefIndicies[dataRegVals[srcReg]];
@@ -890,8 +984,8 @@ namespace swspl.nso
                                 refIdx++;
                             }
 
-                            uint a = (uint)dataRegVals[srcReg] + (uint)destAddr;
-                            if (!mRefTypes.ContainsKey(dataRegVals[srcReg] + destAddr))
+                            long a = dataRegVals[srcReg] + destAddr;
+                            if (!mRefTypes.ContainsKey(a))
                             {
                                 DataRefType t = DataRefType.QWORD;
                                 if (dstReg_Str.StartsWith("s"))
@@ -907,7 +1001,6 @@ namespace swspl.nso
                             }
 
                             dataRefIndicies[dataRegVals[srcReg]].RemoveAt(refIdx);
-
                             string f = funcStr.ElementAt(idx);
                             f = f.Replace("REPLACEME", $"{(dataRegVals[srcReg] + destAddr):X}");
                             funcStr[idx] = f;
@@ -917,6 +1010,60 @@ namespace swspl.nso
                         else
                         {
                             // we don't do anything to the ldr if it's just a normal load
+                            funcStr.Add($"\t{instr}");
+                        }
+                    }
+                    else if (instr.Mnemonic == "ldrb" || instr.Mnemonic == "strb")
+                    {
+                        Arm64RegisterId srcReg = instr.Details.Operands[1].Memory.Base.Id;
+
+                        if (dataRegVals.ContainsKey(srcReg))
+                        {
+                            string dstReg_Str = instr.Details.Operands[0].Register.Name;
+                            string srcReg_Str = instr.Details.Operands[1].Memory.Base.Name;
+                            long destAddr = instr.Details.Operands[1].Memory.Displacement;
+                            if (instr.Mnemonic == "ldrb")
+                            {
+                                funcStr.Add($"\tldrb {dstReg_Str}, [{srcReg_Str}, :lo12:off_{(dataRegVals[srcReg] + destAddr):X}]");
+                            }
+                            else
+                            {
+                                funcStr.Add($"\tstrb {dstReg_Str}, [{srcReg_Str}, :lo12:off_{(dataRegVals[srcReg] + destAddr):X}]");
+                            }
+                            
+
+                            // now let's adjust our other loader (adrp)
+                            List<DataRef> r = dataRefIndicies[dataRegVals[srcReg]];
+                            int idx = -1;
+                            int refIdx = 0;
+
+                            foreach (DataRef _ in r)
+                            {
+                                if (_.mRegister == srcReg)
+                                {
+                                    idx = _.mIndex;
+                                    break;
+                                }
+
+                                refIdx++;
+                            }
+
+                            long a = dataRegVals[srcReg] + destAddr;
+                            if (!mRefTypes.ContainsKey(a))
+                            {
+                                mRefTypes.Add(a, DataRefType.BYTE);
+                            }
+
+                            dataRefIndicies[dataRegVals[srcReg]].RemoveAt(refIdx);
+
+                            string f = funcStr.ElementAt(idx);
+                            f = f.Replace("REPLACEME", $"{(dataRegVals[srcReg] + destAddr):X}");
+                            funcStr[idx] = f;
+                            dataRegVals.Remove(srcReg);
+
+                        }
+                        else
+                        {
                             funcStr.Add($"\t{instr}");
                         }
                     }

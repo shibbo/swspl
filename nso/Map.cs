@@ -37,7 +37,26 @@ namespace swspl.nso
 
                 int size = Convert.ToInt32(spl[3], 16);
                 mSymbols.Add(sym, new Symbol(sym, seg, addr, size));
+
+                if (seg == ".text")
+                {
+                    if (addr < StartAddress)
+                    {
+                        StartAddress = addr;
+                    }
+
+                    ulong end = addr + (ulong)size;
+                    if (end > EndAddress)
+                    {
+                        EndAddress = end;
+                    }
+                }
             }
+        }
+
+        public static bool IsInText(ulong addr)
+        {
+            return (StartAddress <= addr) && (addr <= EndAddress);
         }
 
         public static int GetSymbolSize(string sym)
@@ -60,7 +79,6 @@ namespace swspl.nso
                 }
             }
 
-            Console.WriteLine($"Found unknown symbol: 0x{addr:X}");
             return "UNK";
         }
 
@@ -75,6 +93,9 @@ namespace swspl.nso
         }
 
         public static Dictionary<string, Symbol> mSymbols = new();
+        private static ulong StartAddress;
+        private static ulong EndAddress;
+
         public class Symbol
         {
             public Symbol(string name, string seg, ulong addr, int size)
