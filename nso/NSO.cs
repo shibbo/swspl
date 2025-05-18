@@ -20,6 +20,7 @@ namespace swspl.nso
     public enum DataRefType 
     { 
         BYTE,
+        WORD,
         QWORD,
         XWORD,
         SINGLE
@@ -260,6 +261,8 @@ namespace swspl.nso
                     for (int i = 0; i < 3; i++)
                     {
                         ulong o = (ulong)gotPltMemOffs + BaseAdress;
+
+
                         gotPltFile.Add($".global off_{o:X}");
                         gotPltFile.Add($"off_{o:X}:");
                         gotPltFile.Add($"\t.quad 0");
@@ -381,7 +384,7 @@ namespace swspl.nso
 
                     ulong dataEntryStart = dynOffs;
                     ulong dataBaseOffs = mDataSegment.GetMemoryOffset();
-                    for (ulong i = 0; i < dataEntryStart; i += 8)
+                    for (ulong i = 0; i < dataEntryStart; i += 4)
                     {
                         ulong addr = dataBaseOffs + i;
                         bool labeled = false;
@@ -486,8 +489,18 @@ namespace swspl.nso
                             long a = (long)BaseAdress + (long)addr;
                             if (labeled == false)
                             {
-                                dataFile.Add($".global off_{a:X}");
-                                dataFile.Add($"off_{a:X}:");
+                                string sym = Map.GetSymbolAtAddr((ulong)a);
+
+                                if (sym != "UNK")
+                                {
+                                    dataFile.Add($".global {sym}");
+                                    dataFile.Add($"{sym}:");
+                                }
+                                else
+                                {
+                                    dataFile.Add($".global off_{a:X}");
+                                    dataFile.Add($"off_{a:X}:");
+                                }
                             }
 
                             if (mRefTypes.ContainsKey(a))
@@ -519,6 +532,13 @@ namespace swspl.nso
                                     float l = BitConverter.ToSingle(val);
                                     dataFile.Add($"\t.float {l}");
                                 }
+                                else if (t == DataRefType.WORD)
+                                {
+                                    byte[] val = new byte[4];
+                                    Array.Copy(mData, (int)i, val, 0, 4);
+                                    int r = BitConverter.ToInt32(val);
+                                    dataFile.Add($"\t.word {r}");
+                                }
                                 else
                                 {
                                     Console.WriteLine($"unsupported data ref type alert: {t}");
@@ -526,10 +546,10 @@ namespace swspl.nso
                             }
                             else
                             {
-                                byte[] val = new byte[8];
-                                Array.Copy(mData, (int)i, val, 0, 8);
-                                long l = BitConverter.ToInt64(val);
-                                dataFile.Add($"\t.quad 0x{l:X}");
+                                byte[] val = new byte[4];
+                                Array.Copy(mData, (int)i, val, 0, 4);
+                                int l = BitConverter.ToInt32(val);
+                                dataFile.Add($"\t.word 0x{l:X}");
                             }
                         }
                     }
@@ -580,8 +600,19 @@ namespace swspl.nso
                                 }
                                 else
                                 {
-                                    rodataFile.Add($".global off_{a:X}");
-                                    rodataFile.Add($"off_{a:X}:");
+                                    string sym = Map.GetSymbolAtAddr((ulong)a);
+
+                                    if (sym != "UNK")
+                                    {
+                                        rodataFile.Add($".global {sym}");
+                                        rodataFile.Add($"{sym}:");
+                                    }
+                                    else
+                                    {
+                                        rodataFile.Add($".global off_{a:X}");
+                                        rodataFile.Add($"off_{a:X}:");
+                                    }
+
                                     for (long j = 0; j < dist; j++)
                                     {
                                         rodataFile.Add($"\t.byte 0x{b[j]:X}");
@@ -625,8 +656,19 @@ namespace swspl.nso
                                     }
                                 }
 
-                                rodataFile.Add($".global off_{a:X}");
-                                rodataFile.Add($"off_{a:X}:");
+                                string sym = Map.GetSymbolAtAddr((ulong)a);
+
+                                if (sym != "UNK")
+                                {
+                                    rodataFile.Add($".global {sym}");
+                                    rodataFile.Add($"{sym}:");
+                                }
+                                else
+                                {
+                                    rodataFile.Add($".global off_{a:X}");
+                                    rodataFile.Add($"off_{a:X}:");
+                                }
+
                                 rodataFile.Add($"\t.float {s}");
                                 i += 4;
                             }
@@ -640,8 +682,18 @@ namespace swspl.nso
                                     hasAlignedForData = true;
                                 }
 
-                                rodataFile.Add($".global off_{a:X}");
-                                rodataFile.Add($"off_{a:X}:");
+                                string sym = Map.GetSymbolAtAddr((ulong)a);
+
+                                if (sym != "UNK")
+                                {
+                                    rodataFile.Add($".global {sym}");
+                                    rodataFile.Add($"{sym}:");
+                                }
+                                else
+                                {
+                                    rodataFile.Add($".global off_{a:X}");
+                                    rodataFile.Add($"off_{a:X}:");
+                                }
 
                                 for (long j = 0; j < 16; j++)
                                 {
@@ -653,8 +705,19 @@ namespace swspl.nso
                             }
                             else if (t == DataRefType.BYTE)
                             {
-                                rodataFile.Add($".global off_{a:X}");
-                                rodataFile.Add($"off_{a:X}:");
+                                string sym = Map.GetSymbolAtAddr((ulong)a);
+
+                                if (sym != "UNK")
+                                {
+                                    rodataFile.Add($".global {sym}");
+                                    rodataFile.Add($"{sym}:");
+                                }
+                                else
+                                {
+                                    rodataFile.Add($".global off_{a:X}");
+                                    rodataFile.Add($"off_{a:X}:");
+                                }
+
                                 byte b = dynReader.ReadByte();
                                 rodataFile.Add($"\t.byte 0x{b:X}");
 
@@ -663,6 +726,25 @@ namespace swspl.nso
                                     rodataFile.Add($"\t.byte 0");
                                 }
 
+                                i += 4;
+                            }
+                            else if (t == DataRefType.WORD)
+                            {
+                                string sym = Map.GetSymbolAtAddr((ulong)a);
+
+                                if (sym != "UNK")
+                                {
+                                    rodataFile.Add($".global {sym}");
+                                    rodataFile.Add($"{sym}:");
+                                }
+                                else
+                                {
+                                    rodataFile.Add($".global off_{a:X}");
+                                    rodataFile.Add($"off_{a:X}:");
+                                }
+
+                                uint b = dynReader.ReadUInt32();
+                                rodataFile.Add($"\t.word 0x{b:X}");
                                 i += 4;
                             }
                         }
@@ -717,6 +799,12 @@ namespace swspl.nso
             {
                 Map.Symbol symbol = Map.mSymbols[key];
                 AssignAddrToSym(symbol.GetAddr(), key);
+                // this is a data symbol
+                // these are at the end, so we are done with .text
+                if (symbol.GetSize() == -1)
+                {
+                    break;
+                }
                 long pos = (long)(symbol.GetAddr() - BaseAdress) - startPos;
                 byte[] funcBytes = textBytes.Skip((int)pos).Take((int)symbol.GetSize()).ToArray();
                 ParseFunction((ulong)symbol.GetSize(), symbol.GetAddr() - BaseAdress, key, funcBytes, pos, pos + startPos);
@@ -916,6 +1004,10 @@ namespace swspl.nso
                                 {
                                     t = DataRefType.XWORD;
                                 }
+                                else if (destReg_Str.StartsWith("w"))
+                                {
+                                    t = DataRefType.WORD;
+                                }
 
                                 mRefTypes.Add(finalAddr, t);
                             }
@@ -995,6 +1087,10 @@ namespace swspl.nso
                                 else if (dstReg_Str.StartsWith("q"))
                                 {
                                     t = DataRefType.XWORD;
+                                }
+                                else if (dstReg_Str.StartsWith("w"))
+                                {
+                                    t = DataRefType.WORD;
                                 }
 
                                 mRefTypes.Add(dataRegVals[srcReg] + destAddr, t);

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -11,45 +12,67 @@ namespace swspl.nso
         public static void LoadMap(string path)
         {
             string[] lines = File.ReadAllLines(path);
+            bool parsingData = false;
 
             foreach (string line in lines)
             {
-                string[] spl = line.Split("\t");
-                string sym = spl[0];
-
-                if (sym == "Function name" || mSymbols.ContainsKey(sym))
+                if (line == "START_DATA")
                 {
+                    parsingData = true;
                     continue;
                 }
 
-                if (sym.StartsWith("sub_"))
+                if (parsingData == false)
                 {
-                    sym = sym.Replace("sub_", "fn_");
-                }
+                    string[] spl = line.Split("\t");
+                    string sym = spl[0];
 
-                string seg = spl[1];
-                ulong addr = Convert.ToUInt64(spl[2], 16);
-
-                if (sym.StartsWith("nullsub_"))
-                {
-                    sym = $"fn_{addr:X}";
-                }
-
-                int size = Convert.ToInt32(spl[3], 16);
-                mSymbols.Add(sym, new Symbol(sym, seg, addr, size));
-
-                if (seg == ".text")
-                {
-                    if (addr < StartAddress)
+                    if (sym == "Function name" || mSymbols.ContainsKey(sym))
                     {
-                        StartAddress = addr;
+                        continue;
                     }
 
-                    ulong end = addr + (ulong)size;
-                    if (end > EndAddress)
+                    if (sym.StartsWith("sub_"))
                     {
-                        EndAddress = end;
+                        sym = sym.Replace("sub_", "fn_");
                     }
+
+                    string seg = spl[1];
+                    ulong addr = Convert.ToUInt64(spl[2], 16);
+
+                    if (sym.StartsWith("nullsub_"))
+                    {
+                        sym = $"fn_{addr:X}";
+                    }
+
+                    int size = Convert.ToInt32(spl[3], 16);
+                    mSymbols.Add(sym, new Symbol(sym, seg, addr, size));
+
+                    if (seg == ".text")
+                    {
+                        if (addr < StartAddress)
+                        {
+                            StartAddress = addr;
+                        }
+
+                        ulong end = addr + (ulong)size;
+                        if (end > EndAddress)
+                        {
+                            EndAddress = end;
+                        }
+                    }
+                }
+                else
+                {
+                    string[] spl = line.Split(" ");
+                    string sym = spl[8];
+                    if (sym.StartsWith("jpt"))
+                    {
+                        continue;
+                    }
+
+                    ulong addr = Convert.ToUInt64(spl[1].Split(":")[1], 16);
+                    mSymbols.Add(sym, new Symbol(sym, ".rodata", addr, -1));
                 }
             }
         }
