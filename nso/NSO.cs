@@ -8,6 +8,7 @@ using System.Linq.Expressions;
 using System.Drawing;
 using System.Collections.Generic;
 using System.Diagnostics.SymbolStore;
+using static swspl.nso.Map;
 
 namespace swspl.nso
 {
@@ -795,10 +796,10 @@ namespace swspl.nso
 
         public void ParseTextSegment(byte[] textBytes, long startPos)
         {
-            foreach(string key in Map.mSymbols.Keys)
+            foreach(KeyValuePair<ulong, Symbol> pair in mSymbols)
             {
-                Map.Symbol symbol = Map.mSymbols[key];
-                AssignAddrToSym(symbol.GetAddr(), key);
+                Symbol symbol = pair.Value;
+                AssignAddrToSym(symbol.GetAddr(), symbol.GetName());
                 // this is a data symbol
                 // these are at the end, so we are done with .text
                 if (symbol.GetSize() == -1)
@@ -807,7 +808,7 @@ namespace swspl.nso
                 }
                 long pos = (long)(symbol.GetAddr() - BaseAdress) - startPos;
                 byte[] funcBytes = textBytes.Skip((int)pos).Take((int)symbol.GetSize()).ToArray();
-                ParseFunction((ulong)symbol.GetSize(), symbol.GetAddr() - BaseAdress, key, funcBytes, pos, pos + startPos);
+                ParseFunction((ulong)symbol.GetSize(), symbol.GetAddr() - BaseAdress, symbol.GetName(), funcBytes, pos, pos + startPos);
             }
 
             mTextFile = mTextFile.OrderBy(e => e.Key).ToDictionary();
