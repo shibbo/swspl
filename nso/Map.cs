@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Xml.Linq;
 
 namespace swspl.nso
 {
@@ -27,7 +28,7 @@ namespace swspl.nso
                     string[] spl = line.Split("\t");
                     string sym = spl[0];
 
-                    if (sym == "Function name" || mSymbols.ContainsKey(sym))
+                    if (sym == "Function name" || GetSymbolByName(sym) != null)
                     {
                         continue;
                     }
@@ -46,7 +47,8 @@ namespace swspl.nso
                     }
 
                     int size = Convert.ToInt32(spl[3], 16);
-                    mSymbols.Add(sym, new Symbol(sym, seg, addr, size));
+                    mSymbols.Add(addr, new Symbol(sym, seg, addr, size));
+                    mSymbolToAddr.Add(sym, addr);
 
                     if (seg == ".text")
                     {
@@ -72,9 +74,17 @@ namespace swspl.nso
                     }
 
                     ulong addr = Convert.ToUInt64(spl[1].Split(":")[1], 16);
-                    mSymbols.Add(sym, new Symbol(sym, ".rodata", addr, -1));
+                    mSymbols.Add(addr, new Symbol(sym, ".rodata", addr, -1));
+                    mSymbolToAddr.Add(sym, addr);
                 }
             }
+        }
+
+        public static Symbol? GetSymbolByName(string name)
+        {
+            if (!mSymbolToAddr.TryGetValue(name, out ulong addr))
+                return null;
+            return mSymbols[addr];
         }
 
         public static bool IsInText(ulong addr)
@@ -84,38 +94,29 @@ namespace swspl.nso
 
         public static int GetSymbolSize(string sym)
         {
-            if (mSymbols.ContainsKey(sym))
-            {
-                return mSymbols[sym].GetSize();
-            }
-
-            return 0;
+            Symbol? symbol = GetSymbolByName(sym);
+            if (symbol == null)
+                return 0;
+            return symbol.GetSize();
         }
 
         public static string GetSymbolAtAddr(ulong addr)
         {
-            foreach (KeyValuePair<string, Symbol> pair in mSymbols)
-            {
-                if (pair.Value.GetAddr() == addr)
-                {
-                    return pair.Key;
-                }
-            }
-
-            return "UNK";
+            if (!mSymbols.TryGetValue(addr, out Symbol? symbol) || symbol == null)
+                return "UNK";
+            return symbol.GetName();
         }
 
         public static ulong GetSymbolAddr(string sym)
         {
-            if (mSymbols.ContainsKey(sym))
-            {
-                return mSymbols[sym].GetAddr();
-            }
-
-            return 0;
+            Symbol? symbol = GetSymbolByName(sym);
+            if (symbol == null)
+                return 0;
+            return symbol.GetAddr();
         }
 
-        public static Dictionary<string, Symbol> mSymbols = new();
+        private static Dictionary<string, ulong> mSymbolToAddr = new();
+        public static Dictionary<ulong, Symbol> mSymbols = new();
         private static ulong StartAddress;
         private static ulong EndAddress;
 
@@ -137,6 +138,11 @@ namespace swspl.nso
             public ulong GetAddr()
             {
                 return mAddr;
+            }
+
+            public string GetName()
+            {
+                return mName;
             }
 
             string mName;
